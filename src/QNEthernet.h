@@ -57,9 +57,16 @@ enum EthernetHardwareStatus {
   EthernetOtherHardware = -1,
 };
 
-// The class for interacting with a network interface. `Ethernet` is bound to
-// the primary (wired) driver. Note that some settings, such as DNS servers,
-// are shared by all interfaces.
+/**
+ * @brief The class for interacting with a network interface.
+ *
+ * The `Ethernet` instance is bound to the primary (wired) driver. When a WiFi
+ * driver is compiled in, the `WiFi` instance (WiFiClass) uses this class for
+ * the WiFi interface.
+ *
+ * Note that some settings, such as DNS servers, are shared by
+ * all interfaces.
+ */
 class EthernetClass {
  public:
   static constexpr size_t kMACAddrSize = ETH_HWADDR_LEN;
@@ -141,8 +148,13 @@ class EthernetClass {
   // See: driverCapabilities()
   void setMACAddress(const uint8_t mac[kMACAddrSize]);
 
-  // Call often. This moves the whole stack along, for all interfaces, so
-  // calling it on any one instance is enough.
+  /**
+   * @brief Moves the network stack along.
+   *
+   * Call this often. It runs the whole stack, for all interfaces, so calling
+   * it on any one instance is enough. By default, it is called from `yield()`
+   * (see QNETHERNET_DO_LOOP_IN_YIELD).
+   */
   void loop();
 
   // Starts Ethernet. The DHCP client will be started depending on whether it's
@@ -457,14 +469,17 @@ class EthernetClass {
     return (netif_ != nullptr);
   }
 
-  // Makes this interface the default route, the one used for destinations
-  // not on any interface's subnet. The primary interface (`Ethernet`) becomes
-  // the default whenever it starts; otherwise, the first interface started
-  // becomes the default. If the default interface is stopped, another started
-  // interface takes over.
-  //
-  // This returns false and sets errno to ENETDOWN if the interface has not
-  // been started.
+  /**
+   * @brief Makes this interface the default route.
+   *
+   * The default route is used for destinations not on any interface's subnet.
+   * The primary interface (`Ethernet`) becomes the default whenever it starts;
+   * otherwise, the first interface started becomes the default. If the default
+   * interface is stopped, another started interface takes over.
+   *
+   * @return Whether successful. If the interface has not been started, this
+   *         returns false and sets errno to ENETDOWN.
+   */
   bool setAsDefaultInterface() const;
 
   // Convenience function that tries to resolve the given hostname into an IP
@@ -500,14 +515,24 @@ class EthernetClass {
             uint8_t ttl = QNETHERNET_DEFAULT_PING_TTL) const;
 
  protected:
-  // Creates a new network interface bound to the primary driver. The MAC
-  // address will be unset.
+  /**
+   * @brief Creates a network interface bound to the primary driver.
+   *
+   * The MAC address will be unset.
+   */
   EthernetClass();
 
-  // Creates a new network interface bound to the given interface. The MAC
-  // address will be unset.
+  /**
+   * @brief Creates a network interface bound to the given interface.
+   *
+   * The MAC address will be unset. This is for subclasses such as WiFiClass.
+   *
+   * @param iface The interface, from enet::primary_interface() or
+   *              enet::wifi_interface().
+   */
   explicit EthernetClass(enet::Interface* iface);
 
+  /** @brief Stops the interface. */
   ~EthernetClass() noexcept;
 
  private:
@@ -590,5 +615,5 @@ extern Print* stderrPrint;
 }  // namespace network
 }  // namespace qindesign
 
-// The WiFi interface, if a WiFi driver is compiled in
+// The WiFi interface (WiFiClass and `WiFi`), if a WiFi driver is compiled in
 #include "QNWiFi.h"

@@ -1,5 +1,10 @@
-// driver_CYW4343W_wifi.h declares the WiFi-specific functions of the CYW4343W
-// driver, used by WiFiClass.
+/**
+ * @file driver_CYW4343W_wifi.h
+ * @brief Declares the WiFi-specific functions of the CYW4343W driver.
+ *
+ * These are used by WiFiClass. The driver's general functions are in its
+ * DriverOps table (driver_cyw4343w::kDriverOps).
+ */
 
 #pragma once
 
@@ -9,76 +14,126 @@
 
 namespace qindesign {
 namespace network {
+/** @brief The CYW4343W/CYW43439 WiFi driver. */
 namespace driver_cyw4343w {
 
-// Security types for joining a network. The values match what the
-// join code expects.
+/**
+ * @brief Security type for joining a network.
+ *
+ * The values match what the chip's join code expects.
+ */
 enum class Security : uint8_t {
-  kOpen    = 0,
-  kWPA     = 1,  // WPA-TKIP
-  kWPA2    = 2,  // WPA2-AES
+  kOpen    = 0,  ///< No security.
+  kWPA     = 1,  ///< WPA-TKIP.
+  kWPA2    = 2,  ///< WPA2-AES.
 };
 
-// Security bits for a scan result.
+/**
+ * @brief Security bits for a scan result.
+ *
+ * A network may advertise more than one, for example WPA and WPA2.
+ */
 enum ScanSecurityBits : uint8_t {
-  kScanSecurityOpen = 0,
-  kScanSecurityWEP  = (1 << 0),
-  kScanSecurityWPA  = (1 << 1),
-  kScanSecurityWPA2 = (1 << 2),
-  kScanSecurityWPA3 = (1 << 3),
+  kScanSecurityOpen = 0,         ///< No security.
+  kScanSecurityWEP  = (1 << 0),  ///< WEP.
+  kScanSecurityWPA  = (1 << 1),  ///< WPA.
+  kScanSecurityWPA2 = (1 << 2),  ///< WPA2.
+  kScanSecurityWPA3 = (1 << 3),  ///< WPA3 (SAE).
 };
 
-// Join state.
+/** @brief The state of joining a network. */
 enum class JoinStatus : uint8_t {
-  kStopped,  // Not trying to join
-  kJoining,  // Trying to join (or rejoin)
-  kJoined,   // Joined and authenticated
-  kFailed,   // The last attempt failed; it will be retried
+  kStopped,  ///< Not trying to join.
+  kJoining,  ///< Trying to join (or rejoin).
+  kJoined,   ///< Joined and authenticated.
+  kFailed,   ///< The last attempt failed; it will be retried.
 };
 
-// One network found by a scan.
+/** @brief One network found by a scan. */
 struct ScanResult {
-  char ssid[33];  // NUL-terminated
-  uint8_t bssid[6];
-  int16_t rssi;  // dBm
-  uint8_t channel;
-  uint8_t security;  // ScanSecurityBits
+  char ssid[33];     ///< The network name, NUL-terminated.
+  uint8_t bssid[6];  ///< The access point's MAC address.
+  int16_t rssi;      ///< The signal strength, in dBm.
+  uint8_t channel;   ///< The radio channel.
+  uint8_t security;  ///< A combination of ScanSecurityBits.
 };
 
-// Maximum lengths, not including any NUL terminator.
+/** @brief The maximum SSID length, not including a NUL terminator. */
 constexpr size_t kMaxSSIDLen       = 32;
+
+/** @brief The minimum passphrase length for a secured network. */
 constexpr size_t kMinPassphraseLen = 8;
+
+/**
+ * @brief The maximum passphrase length, not including a NUL terminator.
+ */
 constexpr size_t kMaxPassphraseLen = 63;
 
-// Sets the network to join. This takes effect the next time the driver is
-// initialized (when the interface is started). This returns false if the SSID
-// is empty or too long or if the passphrase length is invalid for the security
-// type; an open network ignores the passphrase.
+/**
+ * @brief Sets the network to join.
+ *
+ * This takes effect the next time the driver is initialized, that is, when
+ * the interface is started.
+ *
+ * @param ssid       The network name, 1 to kMaxSSIDLen characters.
+ * @param passphrase The passphrase, kMinPassphraseLen to kMaxPassphraseLen
+ *                   characters. Ignored for an open network; may be NULL.
+ * @param security   The security type.
+ * @return Whether the SSID and passphrase are valid for the security type.
+ */
 bool set_credentials(const char* ssid, const char* passphrase,
                      Security security);
 
-// Returns the SSID set by set_credentials(), or an empty string.
+/**
+ * @brief Returns the SSID set by set_credentials().
+ *
+ * @return The SSID, or an empty string if none has been set.
+ */
 const char* ssid();
 
-// Returns the join state.
+/**
+ * @brief Returns the state of joining the network.
+ *
+ * @return The join state.
+ */
 JoinStatus join_status();
 
-// Gets the RSSI of the joined network, in dBm. This returns false if not
-// joined or on error.
+/**
+ * @brief Gets the signal strength of the joined network.
+ *
+ * @param value Filled in with the RSSI, in dBm.
+ * @return Whether successful. This is false if not joined or on error.
+ */
 bool rssi(int32_t* value);
 
-// Gets the BSSID of the joined network. This returns false if not joined or
-// on error.
+/**
+ * @brief Gets the BSSID (the access point's MAC address) of the
+ *        joined network.
+ *
+ * @param mac Filled in with the BSSID.
+ * @return Whether successful. This is false if not joined or on error.
+ */
 bool bssid(uint8_t mac[6]);
 
-// Scans for networks, waiting up to 'timeout' milliseconds. This boots the
-// chip if needed. This returns the number of networks found, or -1 on error.
-// The stack doesn't run while scanning; a few received data frames are
-// queued and the rest are dropped.
+/**
+ * @brief Scans for networks.
+ *
+ * This boots the chip if needed. It blocks, so the network stack doesn't run
+ * while scanning; a few received data frames are queued and the rest
+ * are dropped.
+ *
+ * @param timeout The maximum time to wait, in milliseconds.
+ * @return The number of networks found, or -1 on error.
+ */
 int scan(uint32_t timeout);
 
-// Gets one result from the last scan. This returns false if the index is out
-// of range.
+/**
+ * @brief Gets one result from the last scan.
+ *
+ * @param index  The result index, in [0, scan() result).
+ * @param result Filled in with the result.
+ * @return Whether the index was in range and `result` isn't NULL.
+ */
 bool scan_result(int index, ScanResult* result);
 
 }  // namespace driver_cyw4343w
