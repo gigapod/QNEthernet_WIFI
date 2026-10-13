@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2026 Kirk Benell
+// SPDX-FileCopyrightText: (c) 2026 SparkFun Electronics
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // WiFiBeginEndCycle repeatedly starts WiFi, waits for an address, pings the

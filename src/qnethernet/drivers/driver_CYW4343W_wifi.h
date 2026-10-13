@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: (c) 2026 SparkFun Electronics
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 /**
  * @file driver_CYW4343W_wifi.h
  * @brief Declares the WiFi-specific functions of the CYW4343W driver.

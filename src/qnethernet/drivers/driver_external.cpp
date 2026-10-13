@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2026 Kirk Benell
+// SPDX-FileCopyrightText: (c) 2026 SparkFun Electronics
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // driver_external.cpp wraps an external driver's `driver::x()` functions in an

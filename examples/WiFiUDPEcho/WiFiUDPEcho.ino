@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2026 Kirk Benell
+// SPDX-FileCopyrightText: (c) 2026 SparkFun Electronics
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // WiFiUDPEcho joins a WiFi network and echoes UDP packets back to the sender.
