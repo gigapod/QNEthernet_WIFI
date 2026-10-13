@@ -142,6 +142,12 @@ struct DriverOps {
   // An EthernetHardwareStatus value to report when hardware is found.
   int hardware_status;
 
+  // Whether the hardware generates and checks IP, UDP, TCP, and ICMP
+  // checksums. These are only used when LWIP_CHECKSUM_CTRL_PER_NETIF is
+  // enabled; otherwise the CHECKSUM_GEN_x and CHECKSUM_CHECK_x options apply.
+  bool hw_checksum_gen;
+  bool hw_checksum_check;
+
   void (*get_capabilities)(DriverCapabilities* dc);
   bool (*is_unknown)();
   void (*get_system_mac)(uint8_t mac[ETH_HWADDR_LEN]);
@@ -342,6 +348,17 @@ struct Interface;
 ATTRIBUTE_NODISCARD
 Interface* primary_interface();
 
+#if defined(QNETHERNET_INTERNAL_WIFI_DRIVER_OPS)
+// Returns the WiFi interface, the one bound to the `WiFi` instance.
+ATTRIBUTE_NODISCARD
+Interface* wifi_interface();
+#endif  // QNETHERNET_INTERNAL_WIFI_DRIVER_OPS
+
+// Receives netif events for one interface. 'owner' is the value given
+// to init().
+using EventFn = void (*)(void* owner, netif_nsc_reason_t reason,
+                         const netif_ext_callback_args_t* args);
+
 // Returns the interface's driver ops.
 ATTRIBUTE_NODISCARD
 const DriverOps& driver_ops(const Interface* iface);
@@ -384,7 +401,10 @@ bool set_mac(Interface* iface, const uint8_t mac[ETH_HWADDR_LEN]);
 // This may be called more than once, but if the MAC address has changed then
 // the interface is first removed and then re-added.
 //
-// The netif becomes the default netif only if there isn't one already.
+// The netif becomes the default netif if there isn't one already or if this
+// is the primary interface.
+//
+// Events for this interface's netif are sent to 'fn' with 'owner'.
 //
 // It is suggested to initialize the entropy generator with
 // qnethernet_hal_init_entropy() before calling this.
@@ -393,25 +413,28 @@ bool set_mac(Interface* iface, const uint8_t mac[ETH_HWADDR_LEN]);
 ATTRIBUTE_NODISCARD
 bool init(Interface* iface,
           const uint8_t mac[ETH_HWADDR_LEN],
-          netif_ext_callback_fn callback,
+          EventFn fn, void* owner,
           DriverCapabilities* dc);
 
-// Removes the interface and shuts down its driver.
+// Removes the interface and shuts down its driver. If its netif was the
+// default then another added interface becomes the default.
 void deinit(Interface* iface);
+
+// Makes the interface's netif the default netif (the default route). This
+// returns false if the interface hasn't been added.
+ATTRIBUTE_NODISCARD
+bool set_default(Interface* iface);
 
 // Gets a pointer to the netif structure. This is useful for the netif callback
 // before the default netif has been assigned.
 ATTRIBUTE_NODISCARD
 struct netif* netif(Interface* iface);
 
-// Processes any input. This is meant to be called often by the main loop.
-void proc_input(Interface* iface);
-
-// Polls the driver, for example, the link status.
-void poll(Interface* iface);
-
-// Checks the stack's timeouts. This is shared by all interfaces.
-void check_timeouts();
+// Moves the whole stack along: processes input on all added interfaces and,
+// periodically, checks the stack's timeouts and polls their drivers (for
+// example, the link status). This is meant to be called often by the
+// main loop.
+void loop();
 
 #if QNETHERNET_ENABLE_RAW_FRAME_SUPPORT
 // Outputs a raw ethernet frame. This returns false if frame is NULL or if the

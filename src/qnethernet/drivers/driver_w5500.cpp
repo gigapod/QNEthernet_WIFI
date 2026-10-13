@@ -1118,6 +1118,8 @@ const DriverOps kDriverOps{
     kMTU,
     kMaxFrameLen,
     3 /* EthernetW5500 */,
+    false,
+    false,
     &get_capabilities,
     &is_unknown,
     &get_system_mac,

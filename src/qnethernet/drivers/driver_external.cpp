@@ -18,6 +18,8 @@ const DriverOps kDriverOps{
     MTU,
     MAX_FRAME_LEN,
     -1 /* EthernetOtherHardware */,
+    false,
+    false,
     &driver::get_capabilities,
     &driver::is_unknown,
     &driver::get_system_mac,

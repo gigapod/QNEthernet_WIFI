@@ -1005,14 +1005,10 @@ FLASHMEM bool init() {
                      ;
 
   ENET::group->TACC = 0
-#if (CHECKSUM_GEN_UDP == 0) || \
-    (CHECKSUM_GEN_TCP == 0) || \
-    (CHECKSUM_GEN_ICMP == 0)
+#if QNETHERNET_INTERNAL_TEENSY41_HW_CHECKSUM_GEN
                       | ENET::TACC::PROCHK(1)  // Insert protocol checksum
-#endif  // not(Generate all checksums)
-#if CHECKSUM_GEN_IP == 0
                       | ENET::TACC::IPCHK(1)   // Insert IP header checksum
-#endif  // CHECKSUM_GEN_IP == 0
+#endif  // QNETHERNET_INTERNAL_TEENSY41_HW_CHECKSUM_GEN
 #if ETH_PAD_SIZE == 2
                       | ENET::TACC::SHIFT16(1)
 #endif  // ETH_PAD_SIZE == 2
@@ -1023,16 +1019,12 @@ FLASHMEM bool init() {
                       | ENET::RACC::SHIFT16(1)
 #endif  // ETH_PAD_SIZE == 2
                       | ENET::RACC::LINEDIS(1)  // Discard bad frames
-#if (CHECKSUM_CHECK_UDP == 0) && \
-    (CHECKSUM_CHECK_TCP == 0) && \
-    (CHECKSUM_CHECK_ICMP == 0)
+#if QNETHERNET_INTERNAL_TEENSY41_HW_CHECKSUM_CHECK
                       | ENET::RACC::PRODIS(1)   // Discard frames with incorrect protocol checksum
                                                 // Requires RSFL == 0
-#endif  // not(Check any checksums)
-#if CHECKSUM_CHECK_IP == 0
                       | ENET::RACC::IPDIS(1)    // Discard frames with incorrect IPv4 header checksum
                                                 // Requires RSFL == 0
-#endif  // CHECKSUM_CHECK_IP == 0
+#endif  // QNETHERNET_INTERNAL_TEENSY41_HW_CHECKSUM_CHECK
                       | ENET::RACC::PADREM(1)
                       ;
 
@@ -1374,6 +1366,8 @@ const DriverOps kDriverOps{
     MTU,
     MAX_FRAME_LEN,
     4 /* EthernetTeensy41 */,
+    static_cast<bool>(QNETHERNET_INTERNAL_TEENSY41_HW_CHECKSUM_GEN),
+    static_cast<bool>(QNETHERNET_INTERNAL_TEENSY41_HW_CHECKSUM_CHECK),
     &get_capabilities,
     &is_unknown,
     &get_system_mac,

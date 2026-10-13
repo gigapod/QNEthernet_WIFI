@@ -140,18 +140,23 @@ struct pbuf* proc_input(struct netif *netif, int counter) {
   // Finish any pending link and join status check
   if(netif_is_link_up(netif) == 0) return NULL; 
   sdpcm_header_t hp; // Get capy of WIFI header struct.
-  uint8_t bf[MAX_FRAME_LEN];
+  // The Ethernet frame follows a 10-byte header
+  constexpr uint32_t kHeaderLen = 10;
+  uint8_t bf[QNETHERNET_INTERNAL_CYW4343W_RX_BUF_SIZE + kHeaderLen];
   uint32_t data_len;
   // Check for an available event frame.
-  if((data_len = evt.ioctl_get_event(&hp, bf, MAX_FRAME_LEN)) > 0) {
+  if((data_len = evt.ioctl_get_event(&hp, bf,
+                                     QNETHERNET_INTERNAL_CYW4343W_RX_BUF_SIZE)) > 0) {
+    // Note: data_len is kept as the frame length for compatibility; any
+    //       extra trailing bytes are ignored by the stack
     struct pbuf *p = pbuf_alloc(PBUF_RAW, data_len+ETH_PAD_SIZE, PBUF_RAM);
     if (p == NULL) {
       printf("Failed to allocate pbuf\n");
       return NULL;
     }
-    p->len = p->tot_len = data_len+ETH_PAD_SIZE+ETH_PAD_SIZE;
-    LWIP_ASSERT("Expected space for pbuf fill",
-      pbuf_take(p, (uint8_t *)bf+10, p->tot_len) == ERR_OK);
+    if (pbuf_take_at(p, bf + kHeaderLen, data_len, ETH_PAD_SIZE) != ERR_OK) {
+      LWIP_PLATFORM_ASSERT("Expected space for pbuf fill");
+    }
     return p;
   }
   return NULL;
@@ -187,16 +192,27 @@ void poll(struct netif *netif) {
 // 
 //==============================================================================
 err_t output(struct pbuf *p) {
-  uint8_t *buffer;
+  // The pbuf starts with ETH_PAD_SIZE bytes of padding
+  if (p->tot_len <= ETH_PAD_SIZE) {
+    return ERR_BUF;
+  }
+  const uint16_t len = p->tot_len - ETH_PAD_SIZE;
+  if (len > TXDATA_LEN) {  // event_net_tx() doesn't check
+    return ERR_BUF;
+  }
   // Create a packet buffer.
-  buffer = (uint8_t *)malloc(p->tot_len*sizeof(uint8_t));
+  uint8_t *buffer = (uint8_t *)malloc(len);
+  if (buffer == NULL) {
+    return ERR_MEM;
+  }
   // Fill buffer with packet info.
-  const uint16_t copied = pbuf_copy_partial(p, buffer, p->tot_len, 0);
-  if (copied != p->tot_len) {
+  const uint16_t copied = pbuf_copy_partial(p, buffer, len, ETH_PAD_SIZE);
+  if (copied != len) {
+    free(buffer);
     return ERR_BUF;
   }
   // Transmit buffer.
-  evt.event_net_tx(buffer, copied + ETH_PAD_SIZE);
+  evt.event_net_tx(buffer, copied);
   free(buffer);  // Free buffer mem.
   return ERR_OK;
 }
@@ -206,14 +222,11 @@ err_t output(struct pbuf *p) {
 // Same as output.
 //==============================================================================
 bool output_frame(const void *frame, size_t len) {
-  if (len > (UINT16_MAX - ETH_PAD_SIZE)) {
+  if (len > TXDATA_LEN) {  // event_net_tx() doesn't check
     return false;
   }
-  uint8_t *buffer;
-  buffer = (uint8_t *)malloc(len*sizeof(uint8_t));
-  (void)memcpy((uint8_t*)buffer + ETH_PAD_SIZE, frame, len);
-  evt.event_net_tx(buffer, len + ETH_PAD_SIZE);
-  free(buffer);
+  // The frame has no padding; event_net_tx() copies it
+  evt.event_net_tx(const_cast<void*>(frame), static_cast<int>(len));
   return true;
 }
 #endif
@@ -253,6 +266,8 @@ const DriverOps kDriverOps{
     MTU,
     MAX_FRAME_LEN,
     -1 /* EthernetOtherHardware */,
+    false,
+    false,
     &get_capabilities,
     &is_unknown,
     &get_system_mac,

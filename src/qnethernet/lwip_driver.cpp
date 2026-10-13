@@ -15,6 +15,7 @@
 #include "lwip/etharp.h"
 #include "lwip/init.h"
 #include "lwip/prot/ieee.h"
+#include "lwip/sys.h"
 #include "lwip/timeouts.h"
 #include "netif/ethernet.h"
 #include "qnethernet/platforms/pgmspace.h"
@@ -38,9 +39,8 @@ struct Interface {
   struct netif netif;
   uint8_t mac[ETH_HWADDR_LEN];  // Current MAC address
   bool isNetifAdded;
-#if LWIP_NETIF_EXT_STATUS_CALLBACK
-  netif_ext_callback_t callback;
-#endif  // LWIP_NETIF_EXT_STATUS_CALLBACK
+  EventFn eventFn;
+  void* owner;
 
   // Structs for avoiding memory allocation
 #if LWIP_DHCP
@@ -54,7 +54,7 @@ struct Interface {
 // Creates an interface, getting around some platforms'
 // missing-field-initializers warnings.
 static Interface create_interface(const DriverOps& ops, const uint8_t num) {
-  Interface iface{&ops, {}, {}, false};
+  Interface iface{&ops, {}, {}, false, nullptr, nullptr};
   iface.netif.name[0] = ops.ifname[0];
   iface.netif.name[1] = ops.ifname[1];
   iface.netif.num = num;
@@ -63,6 +63,26 @@ static Interface create_interface(const DriverOps& ops, const uint8_t num) {
 
 static Interface s_primary =
     create_interface(QNETHERNET_INTERNAL_PRIMARY_DRIVER_OPS, 0);
+#if defined(QNETHERNET_INTERNAL_WIFI_DRIVER_OPS)
+static Interface s_wifi = create_interface(QNETHERNET_INTERNAL_WIFI_DRIVER_OPS, 0);
+#endif  // QNETHERNET_INTERNAL_WIFI_DRIVER_OPS
+
+// All the interfaces
+static Interface* const s_interfaces[]{
+    &s_primary,
+#if defined(QNETHERNET_INTERNAL_WIFI_DRIVER_OPS)
+    &s_wifi,
+#endif  // QNETHERNET_INTERNAL_WIFI_DRIVER_OPS
+};
+
+#if LWIP_NETIF_EXT_STATUS_CALLBACK
+// One callback for all interfaces; it dispatches to the owning interface.
+NETIF_DECLARE_EXT_CALLBACK(s_netifCallback)/*;*/
+#endif  // LWIP_NETIF_EXT_STATUS_CALLBACK
+
+// How often to check timeouts and poll the drivers, in milliseconds.
+static constexpr uint32_t kPollInterval = 125;  // About 8 times a second
+static uint32_t s_lastPollTime = 0;
 
 // Gets the interface from a netif that was added by init().
 static inline Interface* iface_from(struct netif* const netif) {
@@ -107,6 +127,22 @@ static err_t multicast_filter(struct netif* const netif,
       // Next best seems to be ERR_IF
 }
 #endif  // LWIP_IGMP && !QNETHERNET_ENABLE_PROMISCUOUS_MODE
+
+#if LWIP_NETIF_EXT_STATUS_CALLBACK
+// Sends netif events to the interface that owns the netif.
+static void netif_event(struct netif* const netif,
+                        const netif_nsc_reason_t reason,
+                        const netif_ext_callback_args_t* const args) {
+  for (Interface* const iface : s_interfaces) {
+    if (&iface->netif == netif) {
+      if (iface->eventFn != nullptr) {
+        iface->eventFn(iface->owner, reason, args);
+      }
+      return;
+    }
+  }
+}
+#endif  // LWIP_NETIF_EXT_STATUS_CALLBACK
 
 // Initializes the netif. This expects netif->state to point to
 // the Interface.
@@ -153,20 +189,41 @@ FLASHMEM static err_t init_netif(struct netif* const netif) {
   netif_set_igmp_mac_filter(netif, &multicast_filter);
 #endif  // LWIP_IGMP && !QNETHERNET_ENABLE_PROMISCUOUS_MODE
 
+#if LWIP_CHECKSUM_CTRL_PER_NETIF
+  // Let the stack do whatever the hardware doesn't
+  uint16_t chksumFlags = NETIF_CHECKSUM_ENABLE_ALL;
+  if (iface->ops->hw_checksum_gen) {
+    chksumFlags &= ~(NETIF_CHECKSUM_GEN_IP | NETIF_CHECKSUM_GEN_UDP |
+                     NETIF_CHECKSUM_GEN_TCP | NETIF_CHECKSUM_GEN_ICMP);
+  }
+  if (iface->ops->hw_checksum_check) {
+    chksumFlags &= ~(NETIF_CHECKSUM_CHECK_IP | NETIF_CHECKSUM_CHECK_UDP |
+                     NETIF_CHECKSUM_CHECK_TCP | NETIF_CHECKSUM_CHECK_ICMP);
+  }
+  NETIF_SET_CHECKSUM_CTRL(netif, chksumFlags);
+#endif  // LWIP_CHECKSUM_CTRL_PER_NETIF
+
   return ERR_OK;
 }
 
 // Removes the interface's netif, if added.
 FLASHMEM static void remove_netif(Interface* const iface) {
-  if (iface->isNetifAdded) {
-    if (netif_default == &iface->netif) {
-      netif_set_default(nullptr);
+  if (!iface->isNetifAdded) {
+    return;
+  }
+
+  const bool wasDefault = (netif_default == &iface->netif);
+  netif_remove(&iface->netif);  // This also clears the default if needed
+  iface->isNetifAdded = false;
+
+  // Fall back to another interface for the default route
+  if (wasDefault) {
+    for (Interface* const other : s_interfaces) {
+      if (other->isNetifAdded) {
+        netif_set_default(&other->netif);
+        break;
+      }
     }
-    netif_remove(&iface->netif);
-#if LWIP_NETIF_EXT_STATUS_CALLBACK
-    netif_remove_ext_callback(&iface->callback);
-#endif  // LWIP_NETIF_EXT_STATUS_CALLBACK
-    iface->isNetifAdded = false;
   }
 }
 
@@ -177,6 +234,12 @@ FLASHMEM static void remove_netif(Interface* const iface) {
 Interface* primary_interface() {
   return &s_primary;
 }
+
+#if defined(QNETHERNET_INTERNAL_WIFI_DRIVER_OPS)
+Interface* wifi_interface() {
+  return &s_wifi;
+}
+#endif  // QNETHERNET_INTERNAL_WIFI_DRIVER_OPS
 
 const DriverOps& driver_ops(const Interface* const iface) {
   return *iface->ops;
@@ -209,7 +272,7 @@ bool set_mac(Interface* const iface, const uint8_t mac[ETH_HWADDR_LEN]) {
 // This only uses the callback if the interface has not been added.
 FLASHMEM bool init(Interface* const iface,
                    const uint8_t mac[ETH_HWADDR_LEN],
-                   const netif_ext_callback_fn callback,
+                   const EventFn fn, void* const owner,
                    DriverCapabilities* const dc) {
   const DriverOps& ops = *iface->ops;
 
@@ -233,6 +296,9 @@ FLASHMEM bool init(Interface* const iface,
   static bool isFirstInit = true;
   if (isFirstInit) {
     lwip_init();
+#if LWIP_NETIF_EXT_STATUS_CALLBACK
+    netif_add_ext_callback(&s_netifCallback, &netif_event);
+#endif  // LWIP_NETIF_EXT_STATUS_CALLBACK
     isFirstInit = false;
   }
 
@@ -251,20 +317,15 @@ FLASHMEM bool init(Interface* const iface,
   }
 
   if (!iface->isNetifAdded) {
-#if LWIP_NETIF_EXT_STATUS_CALLBACK
-    netif_add_ext_callback(&iface->callback, callback);
-#else
-    (void)callback;
-#endif  // LWIP_NETIF_EXT_STATUS_CALLBACK
+    // Set these before adding so the "added" event is delivered
+    iface->eventFn = fn;
+    iface->owner   = owner;
     if (netif_add_noaddr(&iface->netif, iface, init_netif, ethernet_input) ==
         nullptr) {
-#if LWIP_NETIF_EXT_STATUS_CALLBACK
-      netif_remove_ext_callback(&iface->callback);
-#endif  // LWIP_NETIF_EXT_STATUS_CALLBACK
       errno = ENETDOWN;
       return false;
     }
-    if (netif_default == nullptr) {
+    if ((netif_default == nullptr) || (iface == &s_primary)) {
       netif_set_default(&iface->netif);
     }
     iface->isNetifAdded = true;
@@ -278,6 +339,14 @@ FLASHMEM bool init(Interface* const iface,
   return true;
 }
 
+bool set_default(Interface* const iface) {
+  if (!iface->isNetifAdded) {
+    return false;
+  }
+  netif_set_default(&iface->netif);
+  return true;
+}
+
 FLASHMEM void deinit(Interface* const iface) {
   // Restore state
   (void)std::memset(iface->mac, 0, sizeof(iface->mac));
@@ -287,7 +356,8 @@ FLASHMEM void deinit(Interface* const iface) {
   iface->ops->deinit();
 }
 
-void proc_input(Interface* const iface) {
+// Processes any input from the interface's driver.
+static void proc_input(Interface* const iface) {
   struct netif* const netif = &iface->netif;
   int counter = 0;
   while (true) {
@@ -305,12 +375,33 @@ void proc_input(Interface* const iface) {
   }
 }
 
-void poll(Interface* const iface) {
-  iface->ops->poll(&iface->netif);
-}
+void loop() {
+  bool anyAdded = false;
+  for (Interface* const iface : s_interfaces) {
+    if (!iface->isNetifAdded) {
+      continue;
+    }
+    anyAdded = true;
+    proc_input(iface);
 
-void check_timeouts() {
-  (void)sys_check_timeouts();
+#if LWIP_NETIF_LOOPBACK || LWIP_HAVE_LOOPIF
+    // Poll the netif to allow for loopback
+    netif_poll(&iface->netif);
+#endif  // LWIP_NETIF_LOOPBACK || LWIP_HAVE_LOOPIF
+  }
+  if (!anyAdded) {
+    return;
+  }
+
+  if ((sys_now() - s_lastPollTime) >= kPollInterval) {
+    (void)sys_check_timeouts();
+    for (Interface* const iface : s_interfaces) {
+      if (iface->isNetifAdded) {
+        iface->ops->poll(&iface->netif);
+      }
+    }
+    s_lastPollTime = sys_now();
+  }
 }
 
 #if QNETHERNET_ENABLE_RAW_FRAME_SUPPORT

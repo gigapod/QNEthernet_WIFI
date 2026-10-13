@@ -78,7 +78,7 @@ static void attachLoopToYield() {
 // in Arduino-style programs).
 extern "C" void yield() {
   static bool busy = false;  // Prevent reentrancy
-  if (!busy && Ethernet) {
+  if (!busy) {  // Ethernet.loop() moves all the interfaces along
     busy = true;
     Ethernet.loop();
     busy = false;
@@ -89,16 +89,17 @@ extern "C" void yield() {
 #endif  // QNETHERNET_DO_LOOP_IN_YIELD
 
 void EthernetClass::netifEventFunc(
-    struct netif* const netif,
+    void* const owner,
     const netif_nsc_reason_t reason,
     const netif_ext_callback_args_t* const args) {
-  if (netif != Ethernet.netif_) {
+  EthernetClass& self = *static_cast<EthernetClass*>(owner);
+  if (self.netif_ == nullptr) {
     return;
   }
 
   if (reason & LWIP_NSC_LINK_CHANGED) {
-    if ((Ethernet.linkStateCB_ != nullptr) && (args != nullptr)) {
-      Ethernet.linkStateCB_(args->link_changed.state != 0);
+    if ((self.linkStateCB_ != nullptr) && (args != nullptr)) {
+      self.linkStateCB_(args->link_changed.state != 0);
     }
   }
 
@@ -107,15 +108,15 @@ void EthernetClass::netifEventFunc(
                 LWIP_NSC_IPV4_ADDRESS_CHANGED  |
                 LWIP_NSC_IPV4_NETMASK_CHANGED  |
                 LWIP_NSC_IPV4_GATEWAY_CHANGED)) {
-    if (Ethernet.addressChangedCB_ != nullptr) {
-      Ethernet.addressChangedCB_();
+    if (self.addressChangedCB_ != nullptr) {
+      self.addressChangedCB_();
     }
   }
 #endif  // LWIP_IPV4
 
   if (reason & LWIP_NSC_STATUS_CHANGED) {
-    if ((Ethernet.interfaceStatusCB_ != nullptr) && (args != nullptr)) {
-      Ethernet.interfaceStatusCB_(args->status_changed.state != 0);
+    if ((self.interfaceStatusCB_ != nullptr) && (args != nullptr)) {
+      self.interfaceStatusCB_(args->status_changed.state != 0);
     }
   }
 }
@@ -189,20 +190,15 @@ void EthernetClass::setMACAddress(const uint8_t mac[kMACAddrSize]) {
 }
 
 void EthernetClass::loop() {
-  enet::proc_input(iface_);
+  enet::loop();
+}
 
-#if LWIP_NETIF_LOOPBACK || LWIP_HAVE_LOOPIF
-  // Poll the netif to allow for loopback
-  if (netif_ != nullptr) {
-    netif_poll(netif_);
+bool EthernetClass::setAsDefaultInterface() const {
+  if (!enet::set_default(iface_)) {
+    errno = ENETDOWN;
+    return false;
   }
-#endif  // LWIP_NETIF_LOOPBACK || LWIP_HAVE_LOOPIF
-
-  if ((sys_now() - lastPollTime_) >= kPollInterval) {
-    enet::check_timeouts();
-    enet::poll(iface_);
-    lastPollTime_ = sys_now();
-  }
+  return true;
 }
 
 bool EthernetClass::begin() {
@@ -212,20 +208,20 @@ bool EthernetClass::begin() {
 bool EthernetClass::begin(const IPAddress& ip,
                           const IPAddress& mask,
                           const IPAddress& gateway) {
-  return begin(ip, mask, gateway, static_cast<const IPAddress*>(nullptr));
+  return beginWithDNS(ip, mask, gateway, nullptr);
 }
 
 bool EthernetClass::begin(const IPAddress& ip,
                           const IPAddress& mask,
                           const IPAddress& gateway,
                           const IPAddress& dns) {
-  return begin(ip, mask, gateway, &dns);
+  return beginWithDNS(ip, mask, gateway, &dns);
 }
 
-bool EthernetClass::begin(const IPAddress& ip,
-                          const IPAddress& mask,
-                          const IPAddress& gateway,
-                          const IPAddress* dns) {
+bool EthernetClass::beginWithDNS(const IPAddress& ip,
+                                 const IPAddress& mask,
+                                 const IPAddress& gateway,
+                                 const IPAddress* dns) {
 #if LWIP_IPV4
   const ip4_addr_t ipaddr{static_cast<uint32_t>(ip)};
   const ip4_addr_t netmask{static_cast<uint32_t>(mask)};
@@ -309,6 +305,14 @@ bool EthernetClass::start() {
   // Initialize Ethernet, set up the callback, and set the netif to UP
   netif_ = enet::netif(iface_);
 
+  if (!enet::init(iface_, macAddress(), &netifEventFunc, this,
+                  &driverCapabilities_)) {
+    netif_ = nullptr;
+    ifName_[0] = '\0';
+    return false;
+  }
+
+  // The stack assigns the number when the netif is added
   ifName_[0] = netif_->name[0];
   ifName_[1] = netif_->name[1];
   const int numSize = [](const uint8_t n) {
@@ -324,12 +328,6 @@ bool EthernetClass::start() {
       std::snprintf(&ifName_[2], sizeof(ifName_) - 2, "%u", netif_->num);
   if (count != numSize) {
     LWIP_PLATFORM_ASSERT("Expected complete interface name fill");
-  }
-
-  if (!enet::init(iface_, macAddress(), &netifEventFunc, &driverCapabilities_)) {
-    netif_ = nullptr;
-    ifName_[0] = '\0';
-    return false;
   }
 
   if (!enet::get_mac(iface_, mac_.value)) {
