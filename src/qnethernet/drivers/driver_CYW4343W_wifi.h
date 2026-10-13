@@ -73,7 +73,8 @@ bool bssid(uint8_t mac[6]);
 
 // Scans for networks, waiting up to 'timeout' milliseconds. This boots the
 // chip if needed. This returns the number of networks found, or -1 on error.
-// While scanning, received frames are dropped.
+// The stack doesn't run while scanning; a few received data frames are
+// queued and the rest are dropped.
 int scan(uint32_t timeout);
 
 // Gets one result from the last scan. This returns false if the index is out

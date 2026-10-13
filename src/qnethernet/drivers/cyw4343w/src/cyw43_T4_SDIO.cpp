@@ -87,6 +87,7 @@ uint8_t my_mac[MACLEN];    // Internal MAC usage.
 //==============================================================================
 W4343WCard *W4343WCard::s_pSdioCards[2] = {nullptr, nullptr}; // uSDHC1, uSDHC2.
 volatile bool W4343WCard::dataISRReceived = false; // Data received ISR flag.
+volatile bool W4343WCard::ioctlBusy = false;
 volatile bool W4343WCard::fUseSDIO2 = false; // true = use SDIO2, false = use SDIO1.
 static  int display_mode = 0; // Debug Mode.
 
@@ -1391,8 +1392,12 @@ int W4343WCard::ioctl_cmd(int cmd, const char *name, int wait_msec, int wr, void
   if(namelen > 0) memcpy(cmdp->data, name, namelen);
   if(wr) memcpy(&cmdp->data[namelen], data, dlen);
   // Send IOCTL command
+  const bool wasBusy = ioctlBusy;
+  ioctlBusy = true;
   cardCMD53_write(SD_FUNC_RAD, SB_32BIT_WIN, (uint8_t *)msgp, CYW43_WRITE_BYTES_PAD(txlen), logOutput);
-  return ioctl_cmd_poll_device(wait_msec, wr, data, dlen, logOutput);
+  const int ret = ioctl_cmd_poll_device(wait_msec, wr, data, dlen, logOutput);
+  ioctlBusy = wasBusy;
+  return ret;
 }
 //==============================================================================
 
@@ -1432,26 +1437,41 @@ int W4343WCard::ioctl_cmd_poll_device(int wait_msec, int wr, void *data, int dle
     if(val & 0xff) {
       // ..request response
       backplaneWindow_write32(SB_INT_STATUS_REG, val);
-      // Fetch response
-      //TODO - Temporarily break into header/data to compare lengths, help separate send/receive
-      uint16_t hdr[2];
-      ret = cardCMD53_read(SD_FUNC_RAD, SB_32BIT_WIN, (uint8_t *)hdr, 4, logOutput);
-      if(hdr[0] == 0 && hdr[1] == 0) {
-        // no packets
-#if USE_DEBUG_MODE == true
-        printf(SER_ERROR "No packets\n" SER_RESET);
-#endif
-        had_successful_packet = false;
-        return 1;
+      // Fetch frames until the response arrives. Other frames (events and
+      // data) are routed to their handlers instead of being dropped, and
+      // whole frames are read into the event receive buffer, so a large
+      // frame can't overflow the response buffer.
+      sdpcm_header_t fh;
+      int n;
+      bool routedAny = false;
+      while(true) {
+        n = evt.read_frame(&fh);
+        if(n <= 0 || fh.sw_header.chan == SDPCM_CHAN_CTRL) break;
+        (void)evt.route_frame(&fh, n);
+        routedAny = true;
       }
-      had_successful_packet = true;
-      //Validate header size = not header size
-      if((hdr[0] ^ hdr[1]) != 0xffff) {
-        printf(SER_ERROR "Header mismatch 0x%04x ^ 0x%04x\n" SER_RESET, hdr[0], hdr[1]);
+      if(n <= 0 && routedAny && fh.len == 0 && fh.notlen == 0) {
+        // Only other frames so far; keep waiting for the response
+        delay(IOCTL_POLL_MSEC);
+        continue;
+      }
+      if(n <= 0) {
+        if(fh.len == 0 && fh.notlen == 0) {
+          // no packets
+#if USE_DEBUG_MODE == true
+          printf(SER_ERROR "No packets\n" SER_RESET);
+#endif
+          had_successful_packet = false;
+          return 1;
+        }
+        printf(SER_ERROR "Header mismatch 0x%04x ^ 0x%04x\n" SER_RESET, fh.len, fh.notlen);
         return 0;
       }
-      memcpy(rsp, hdr, 4);
-      ret = cardCMD53_read(SD_FUNC_RAD, SB_32BIT_WIN, (uint8_t *)rsp + 4, hdr[0] - 4, logOutput);
+      had_successful_packet = true;
+      memcpy(rsp, &fh, sizeof(fh));
+      memcpy((uint8_t *)rsp + sizeof(fh), evt.rx_payload(),
+             MIN((size_t)n, sizeof(ioctl_rxmsg) - sizeof(fh)));
+      ret = 1;
       // Discard response if not matching request
       if((rsp->cmd.flags >> 16) != ioctl_reqid) {
 #if DEBUG_WARNINGS == true

@@ -57,7 +57,7 @@ Joining happens in the background and is retried if it fails or the link is lost
 Notes:
 - Both interfaces share the stack: DNS servers are shared, and calling `Ethernet.loop()` (done automatically from `yield()`) runs both.
 - The default route is `Ethernet` whenever it's started; use `setAsDefaultInterface()` to change it.
-- `scanNetworks()` blocks and the WiFi interface drops received frames while scanning.
+- `scanNetworks()` blocks; a few frames received over WiFi during the scan are queued and the rest are dropped.
 
 See the "EthernetAndWiFi" and "cyw43_scan" examples.
 

@@ -49,6 +49,66 @@ static bool s_credentialsChanged = false;
 // Whether the join state machine is running
 static bool s_joinEnabled = false;
 
+// --------------------------------------------------------------------------
+//  Receive Queue
+// --------------------------------------------------------------------------
+
+// Frames can be read outside proc_input() (while waiting for an ioctl
+// response or while scanning), so data frames are queued here.
+
+// The maximum number of frames proc_input() reads per call and per loop.
+static constexpr int kMaxFramesPerLoop = 8;
+
+static constexpr int kRxQueueSize = 8;
+static struct pbuf* s_rxQueue[kRxQueueSize];
+static int s_rxHead  = 0;
+static int s_rxCount = 0;
+
+// The netif, for checking the link state when queuing.
+static struct netif* s_netif = nullptr;
+
+// Removes and returns the oldest queued frame, or NULL if there are none.
+static struct pbuf* rx_dequeue() {
+  if (s_rxCount == 0) {
+    return nullptr;
+  }
+  struct pbuf* const p = s_rxQueue[s_rxHead];
+  s_rxHead = (s_rxHead + 1) % kRxQueueSize;
+  s_rxCount--;
+  return p;
+}
+
+// Frees all queued frames.
+static void rx_clear() {
+  while (s_rxCount > 0) {
+    (void)pbuf_free(rx_dequeue());
+  }
+}
+
+// Receives data frames from the frame router and queues them for the stack.
+static void on_data_frame(const uint8_t* const frame, const int len) {
+  if ((s_netif == nullptr) || !netif_is_link_up(s_netif) ||
+      (s_rxCount >= kRxQueueSize) || (len <= 0) ||
+      (len > static_cast<int>(MAX_FRAME_LEN))) {
+    LINK_STATS_INC(link.drop);
+    return;
+  }
+  struct pbuf* const p = pbuf_alloc(
+      PBUF_RAW, static_cast<uint16_t>(len + ETH_PAD_SIZE), PBUF_RAM);
+  if (p == nullptr) {
+    LINK_STATS_INC(link.memerr);
+    LINK_STATS_INC(link.drop);
+    return;
+  }
+  if (pbuf_take_at(p, frame, static_cast<uint16_t>(len), ETH_PAD_SIZE) !=
+      ERR_OK) {
+    LWIP_PLATFORM_ASSERT("Expected space for pbuf fill");
+  }
+  LINK_STATS_INC(link.recv);
+  s_rxQueue[(s_rxHead + s_rxCount) % kRxQueueSize] = p;
+  s_rxCount++;
+}
+
 FLASHMEM void get_capabilities(DriverCapabilities* const dc) {
   dc->isMACSettable                = false;
   dc->isLinkStateDetectable        = true;
@@ -89,6 +149,9 @@ bool has_hardware() {
       break;
   }
   s_initState = WIFIboot() ? kInitStateHasHardware : kInitStateNoHardware;
+  if (s_initState == kInitStateHasHardware) {
+    evt.set_data_handler(&on_data_frame);
+  }
   return (s_initState != kInitStateNoHardware);
 }
 
@@ -163,6 +226,7 @@ bool init(void) {
 // Leave network.
 //==============================================================================
 void deinit() {
+  rx_clear();
   if (s_joinEnabled) {
     join.join_stop();
     s_joinEnabled = false;
@@ -178,41 +242,38 @@ void deinit() {
 // driver_proc_input().
 //==============================================================================
 struct pbuf* proc_input(struct netif *netif, int counter) {
-  // Finish any pending link and join status check
-  if(netif_is_link_up(netif) == 0) return NULL; 
-  sdpcm_header_t hp; // Get capy of WIFI header struct.
-  // The Ethernet frame follows a 10-byte header
-  constexpr uint32_t kHeaderLen = 10;
-  uint8_t bf[QNETHERNET_INTERNAL_CYW4343W_RX_BUF_SIZE + kHeaderLen];
-  uint32_t data_len;
-  // Check for an available event frame.
-  if((data_len = evt.ioctl_get_event(&hp, bf,
-                                     QNETHERNET_INTERNAL_CYW4343W_RX_BUF_SIZE)) > 0) {
-    // Note: data_len is kept as the frame length for compatibility; any
-    //       extra trailing bytes are ignored by the stack
-    struct pbuf *p = pbuf_alloc(PBUF_RAW, data_len+ETH_PAD_SIZE, PBUF_RAM);
-    if (p == NULL) {
-      printf("Failed to allocate pbuf\n");
-      return NULL;
-    }
-    if (pbuf_take_at(p, bf + kHeaderLen, data_len, ETH_PAD_SIZE) != ERR_OK) {
-      LWIP_PLATFORM_ASSERT("Expected space for pbuf fill");
-    }
-    return p;
+  s_netif = netif;
+  if (W4343WCard::ioctlBusy || (s_initState != kInitStateInitialized)) {
+    return NULL;
   }
-  return NULL;
+  if (counter >= kMaxFramesPerLoop) {  // Give the rest of the program a turn
+    return NULL;
+  }
+
+  // Read frames until there's a data frame to return; events are handled
+  // along the way
+  for (int i = 0; (s_rxCount == 0) && (i < kMaxFramesPerLoop); i++) {
+    sdpcm_header_t hdr;
+    const int n = evt.read_frame(&hdr);
+    if (n <= 0) {
+      break;
+    }
+    (void)evt.route_frame(&hdr, n);
+  }
+  return rx_dequeue();
 }
 
 //==============================================================================
 // Poll network.
 //==============================================================================
 void poll(struct netif *netif) {
-  if (s_initState != kInitStateInitialized) {
+  s_netif = netif;
+  if (W4343WCard::ioctlBusy || (s_initState != kInitStateInitialized)) {
     return;
   }
-  // Get any events, poll the joining state machine.
+  // Poll the joining state machine. Events, including join events, are read
+  // by proc_input().
   if(WIFIcard.ustimeout(&poll_ticks, EVENT_POLL_USEC)) {
-    evt.pollEvents(); // Check for an event frame.
     // Poll join status. Try to re-join if link is lost.
     if (s_joinEnabled) {
       join.join_state_poll(s_ssid, s_passphrase, static_cast<int>(s_security));
@@ -234,6 +295,10 @@ void poll(struct netif *netif) {
 // 
 //==============================================================================
 err_t output(struct pbuf *p) {
+  if (W4343WCard::ioctlBusy) {  // Can't use the bus now
+    LINK_STATS_INC(link.drop);
+    return ERR_IF;
+  }
   // The pbuf starts with ETH_PAD_SIZE bytes of padding
   if (p->tot_len <= ETH_PAD_SIZE) {
     return ERR_BUF;
@@ -264,6 +329,9 @@ err_t output(struct pbuf *p) {
 // Same as output.
 //==============================================================================
 bool output_frame(const void *frame, size_t len) {
+  if (W4343WCard::ioctlBusy) {  // Can't use the bus now
+    return false;
+  }
   if (len > TXDATA_LEN) {  // event_net_tx() doesn't check
     return false;
   }
@@ -371,6 +439,18 @@ bool bssid(uint8_t mac[6]) {
 // Number of results from the last scan.
 static int s_scanCount = 0;
 
+// Set when the scan-complete event arrives, whichever read path sees it.
+static volatile bool s_scanDone = false;
+
+// Wraps the scan event handler to note completion.
+static int scan_event_handler(EVENT_INFO* const eip) {
+  const int ret = Scan::scan_event_handler(eip);
+  if (ret < 0) {
+    s_scanDone = true;
+  }
+  return ret;
+}
+
 int scan(const uint32_t timeout) {
   s_scanCount = 0;
   if (!has_hardware()) {
@@ -379,22 +459,22 @@ int scan(const uint32_t timeout) {
 
   static bool handlerAdded = false;
   if (!handlerAdded) {
-    if (!evt.add_event_handler(&Scan::scan_event_handler)) {
+    if (!evt.add_event_handler(&scan_event_handler)) {
       return -1;
     }
     handlerAdded = true;
   }
 
   // Note: This replaces the enabled events with the scan events
+  s_scanDone = false;
   const bool started = scn.scan_start();
   if (started) {
-    // Don't call yield() here because the stack's input processing would
-    // consume the scan events
+    // Don't call yield() here so that the stack doesn't run (and possibly
+    // start ioctls) during the scan. Received data frames are queued, up to
+    // the queue size.
     const uint32_t start = millis();
-    while ((millis() - start) < timeout) {
-      if (evt.pollEvents() < 0) {  // Scan complete
-        break;
-      }
+    while (!s_scanDone && ((millis() - start) < timeout)) {
+      (void)evt.pollEvents();
       delayMicroseconds(1000);
     }
     s_scanCount = scn.getScanCount();

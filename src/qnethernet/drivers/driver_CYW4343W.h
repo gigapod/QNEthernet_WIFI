@@ -7,10 +7,6 @@
 #define MTU           1500
 #define MAX_FRAME_LEN 1518  /* Does not include the 4-byte FCS (frame check sequence) */
 
-// Size of the buffer for frames read from the chip. This is larger than
-// MAX_FRAME_LEN because non-data (event) frames may also arrive here.
-#define QNETHERNET_INTERNAL_CYW4343W_RX_BUF_SIZE 4018
-
 // The driver handles any ETH_PAD_SIZE, so it doesn't define one.
 
 #define EVENT_POLL_USEC    100000 //100000

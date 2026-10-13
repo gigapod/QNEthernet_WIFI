@@ -145,8 +145,9 @@ class WiFiClass final : private EthernetClass {
   // --------------------------------------------------------------------------
 
   // Scans for networks, waiting up to 'timeout' milliseconds, and returns the
-  // number found, or -1 on error. This blocks, and while scanning, the WiFi
-  // interface drops received frames.
+  // number found, or -1 on error. This blocks, so the stack doesn't run while
+  // scanning; a few frames received over WiFi are queued and the rest
+  // are dropped.
   int scanNetworks(uint32_t timeout = kDefaultScanTimeout);
 
   // Gets one result from the last scan. This returns false if the index is out

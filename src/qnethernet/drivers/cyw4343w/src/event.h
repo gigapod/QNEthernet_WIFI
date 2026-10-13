@@ -243,6 +243,12 @@ typedef struct {
 // Event handler callback function pointer.
 //==============================================================================
 typedef int (*event_handler_t)(EVENT_INFO *eip);
+
+//==============================================================================
+// Data frame handler: receives an Ethernet frame from the data channel. The
+// frame is only valid during the call.
+//==============================================================================
+typedef void (*data_handler_t)(const uint8_t *frame, int len);
 //==============================================================================
   
 class Event;
@@ -257,7 +263,31 @@ public:
   bool add_event_handler(event_handler_t);
   bool add_server_event_handler(event_handler_t fn, uint16_t port);
   int event_handle(EVENT_INFO *eip);
+  // Reads one frame and routes it (see route_frame()). This returns the event
+  // handler result for an event frame and 0 otherwise.
   int pollEvents(void);
+
+  // Frame routing. All reads of received frames should go through these so
+  // that nothing is lost: events go to the event handlers, data frames go to
+  // the data handler, and control (ioctl response) frames are left for the
+  // caller.
+
+  // Sets the handler for data frames. Data frames are dropped if this is
+  // not set.
+  void set_data_handler(data_handler_t fn);
+
+  // Reads one frame into the receive buffer. This returns the payload length
+  // (after the 12-byte SDPCM header, which goes into *hp), or 0 if there was
+  // no frame. Payloads longer than the buffer are truncated.
+  int read_frame(sdpcm_header_t *hp);
+
+  // Returns the receive buffer, which holds the last payload read.
+  uint8_t *rx_payload() { return eventbuf; }
+  static constexpr int kRxPayloadSize = RXDATA_LEN;
+
+  // Routes a payload in the receive buffer by its channel. This returns the
+  // event handler result for an event frame and 0 otherwise.
+  int route_frame(const sdpcm_header_t *hp, int n);
   int ioctl_enable_evts(EVT_STR *evtp);  
   uint16_t add_csum(uint16_t sum, void *dp, int count);
   int ip_add_data(uint8_t *buff, const void *data, int len);
@@ -270,11 +300,14 @@ public:
 protected:
   
 private:
+  int handle_event_frame(const sdpcm_header_t *hp, int n);
+  void handle_data_frame(const sdpcm_header_t *hp, int n);
+  data_handler_t data_handler = nullptr;
   void ip_cpy(uint8_t *dest, uint8_t *src);
   void print_ip_addr(IPADDR a);
   void print_mac_addr(MACADDR mac);
   uint8_t sd_tx_seq;
-  uint8_t eventbuf[RXDATA_LEN];
+  alignas(4) uint8_t eventbuf[RXDATA_LEN];
   uint8_t event_mask[EVENT_MAX / 8];
   ETH_EVENT_FRAME *eep = (ETH_EVENT_FRAME *)eventbuf;
   EVT_STR *currentE_evts;

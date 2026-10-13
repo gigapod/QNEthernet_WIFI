@@ -159,12 +159,57 @@ int Event::ioctl_enable_evts(EVT_STR *evtp) {
 // Poll events
 // =====================================================================
 int Event::pollEvents() {
-  int n, ret = 0;
+  const int n = read_frame(&iehh);
+  return (n > 0) ? route_frame(&iehh, n) : 0;
+}
+
+// =====================================================================
+// Frame routing
+// =====================================================================
+void Event::set_data_handler(data_handler_t fn) {
+  data_handler = fn;
+}
+
+int Event::read_frame(sdpcm_header_t *hp) {
+  return (int)ioctl_get_event(hp, eventbuf, sizeof(eventbuf));
+}
+
+int Event::route_frame(const sdpcm_header_t *hp, int n) {
+  switch (hp->sw_header.chan) {
+    case SDPCM_CHAN_EVT:
+      return handle_event_frame(hp, n);
+    case SDPCM_CHAN_DATA:
+      handle_data_frame(hp, n);
+      return 0;
+    default:  // Stray control frame
+      return 0;
+  }
+}
+
+// The payload (after the 12-byte SDPCM header) starts with any padding up to
+// hdrlen, then a 4-byte BDC header whose last byte is the number of 32-bit
+// words before the Ethernet frame.
+void Event::handle_data_frame(const sdpcm_header_t *hp, int n) {
+  if (data_handler == nullptr) {
+    return;
+  }
+  const int pad = hp->sw_header.hdrlen - (int)sizeof(sdpcm_header_t);
+  if (pad < 0 || pad + (int)sizeof(BDC_HDR_T4) > n) {
+    return;
+  }
+  const BDC_HDR_T4 *bdc = (const BDC_HDR_T4 *)&eventbuf[pad];
+  const int off = pad + (int)sizeof(BDC_HDR_T4) + bdc->offset * 4;
+  if (off >= n) {
+    return;
+  }
+  data_handler(&eventbuf[off], n - off);
+}
+
+int Event::handle_event_frame(const sdpcm_header_t *hp, int n) {
+  int ret = 0;
   EVENT_INFO *eip = &event_info;
-  
-  //Check for an event response
-  if((n=ioctl_get_event(&iehh, eventbuf, sizeof(eventbuf))) > 0) {
-    eip->chan = iehh.sw_header.chan; // chan = ctrl, evt or data.
+  {
+    eip->chan = hp->sw_header.chan; // chan = ctrl, evt or data.
     eip->flags = SWAP16(eep->event.msg.flags);
     eip->event_type = SWAP32(eep->event.msg.event_type);
     eip->status = SWAP32(eep->event.msg.status);
@@ -190,14 +235,16 @@ uint32_t Event::ioctl_get_event(sdpcm_header_t *hp, uint8_t *data, int maxlen) {
   if(res == true && hp->len > sizeof(sdpcm_header_t) && hp->notlen > 0 && hp->len == (hp->notlen^0xffff)) {
     dlen = hp->len - sizeof(sdpcm_header_t);  //Strip off sdpcm_header_t.
     while (n < dlen && n < maxlen) {
-      blklen = MIN(MIN(maxlen - n, hp->len - n), IOCTL_MAX_BLKLEN_T4);
+      blklen = MIN(MIN(maxlen - n, dlen - n), IOCTL_MAX_BLKLEN_T4);
       WIFIcard.cardCMD53_read(SD_FUNC_RAD, SB_32BIT_WIN, (uint8_t *)(&data[n]), blklen, false);
       n += blklen;
     }
     //Read and discard remaining bytes over maxlen
+    //Note: cardCMD53_read() doesn't read anything into a NULL buffer
+    static uint8_t discard[IOCTL_MAX_BLKLEN_T4] __attribute__((aligned(4)));
     while (n < dlen) {
-      blklen = MIN(hp->len - n, IOCTL_MAX_BLKLEN_T4);
-      WIFIcard.cardCMD53_read(SD_FUNC_RAD, SB_32BIT_WIN, 0, blklen, false);
+      blklen = MIN(dlen - n, IOCTL_MAX_BLKLEN_T4);
+      WIFIcard.cardCMD53_read(SD_FUNC_RAD, SB_32BIT_WIN, discard, blklen, false);
       n += blklen;
     }
   }
