@@ -54,7 +54,7 @@ Joining happens in the background and is retried if it fails or the link is lost
 - `scanNetworks()`, then `scanResult(i, result)` or `SSID(i)`, `RSSI(i)`, `channel(i)`, `BSSID(i, mac)`, `encryptionType(i)`
 - `disconnect()` (same as `end()`)
 
-Sockets: `WiFiClient`, `WiFiServer`, and `WiFiUDP` are aliases for `EthernetClient`, `EthernetServer`, and `EthernetUDP`. Sockets aren't tied to an interface: outgoing traffic leaves through the interface whose subnet holds the destination (otherwise the default interface), and servers and UDP listeners accept on all started interfaces. UDP multicast joins the group on all started interfaces.
+Sockets: `WiFiClient`, `WiFiServer`, and `WiFiUDP` are aliases for `EthernetClient`, `EthernetServer`, and `EthernetUDP`. Sockets aren't tied to an interface: outgoing traffic leaves through the interface whose subnet holds the destination (otherwise the default interface), and servers and UDP listeners accept on all started interfaces. UDP multicast joins the group on all started interfaces. WiFi can receive up to 10 multicast MAC addresses at once (the chip's limit); the IGMP all-systems group and mDNS each use one.
 
 Notes:
 - Both interfaces share the stack: DNS servers are shared, and calling `Ethernet.loop()` (done automatically from `yield()`) runs both.

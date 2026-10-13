@@ -132,6 +132,55 @@ typedef enum {
 
 static enet_init_states_t s_initState = kInitStateStart;
 
+#if !QNETHERNET_ENABLE_PROMISCUOUS_MODE
+
+// --------------------------------------------------------------------------
+//  Multicast Filter
+// --------------------------------------------------------------------------
+
+// The chip accepts frames for up to this many multicast MAC addresses, set
+// with the "mcast_list" iovar: a 32-bit little-endian count followed by the
+// addresses.
+static constexpr int kMaxMulticastMACs = 10;
+
+struct MulticastEntry {
+  uint8_t mac[ETH_HWADDR_LEN];
+  uint16_t refCount;  // Zero means unused
+};
+static MulticastEntry s_mcastTable[kMaxMulticastMACs]{};
+
+// Whether the chip's list needs updating.
+static bool s_mcastDirty = false;
+
+// Sends the multicast list to the chip if it changed and the chip can take it
+// now. Otherwise, this is retried from poll().
+static void apply_multicast_list() {
+  if (!s_mcastDirty || W4343WCard::ioctlBusy ||
+      (s_initState != kInitStateInitialized)) {
+    return;
+  }
+
+  uint8_t buf[4 + kMaxMulticastMACs * ETH_HWADDR_LEN];
+  uint32_t count = 0;
+  for (const MulticastEntry& e : s_mcastTable) {
+    if (e.refCount != 0) {
+      std::memcpy(&buf[4 + count * ETH_HWADDR_LEN], e.mac, ETH_HWADDR_LEN);
+      count++;
+    }
+  }
+  buf[0] = static_cast<uint8_t>(count);
+  buf[1] = 0;
+  buf[2] = 0;
+  buf[3] = 0;
+
+  if (WIFIcard.ioctl_set_data("mcast_list", IOCTL_WAIT, buf,
+                              static_cast<int>(4 + count * ETH_HWADDR_LEN)) > 0) {
+    s_mcastDirty = false;
+  }
+}
+
+#endif  // !QNETHERNET_ENABLE_PROMISCUOUS_MODE
+
 //==============================================================================
 // Has Hardware. This boots the chip the first time.
 //==============================================================================
@@ -219,6 +268,13 @@ bool init(void) {
   if (!s_joinEnabled || s_credentialsChanged) {
     start_join();
   }
+#if QNETHERNET_ENABLE_PROMISCUOUS_MODE
+  // There's no MAC filtering in promiscuous mode, so accept all multicast
+  (void)WIFIcard.ioctl_set_uint32("allmulti", IOCTL_WAIT, 1);
+#else
+  s_mcastDirty = true;
+  apply_multicast_list();
+#endif  // QNETHERNET_ENABLE_PROMISCUOUS_MODE
   return true;
 }
 
@@ -284,11 +340,20 @@ void poll(struct netif *netif) {
   const bool linkUp = s_joinEnabled && (join.join_check() == JOIN_OK);
   if (static_cast<bool>(netif_is_link_up(netif)) != linkUp) {
     if (linkUp) {
+#if !QNETHERNET_ENABLE_PROMISCUOUS_MODE
+      // Joining may reset the chip's multicast list, so send it again
+      s_mcastDirty = true;
+#endif  // !QNETHERNET_ENABLE_PROMISCUOUS_MODE
       netif_set_link_up(netif);
     } else {
       netif_set_link_down(netif);
     }
   }
+
+#if !QNETHERNET_ENABLE_PROMISCUOUS_MODE
+  // Retry any multicast list update that couldn't be sent earlier
+  apply_multicast_list();
+#endif  // !QNETHERNET_ENABLE_PROMISCUOUS_MODE
 }
 
 //==============================================================================
@@ -352,10 +417,64 @@ void get_link_info(struct LinkInfo* const li) {
 #if !QNETHERNET_ENABLE_PROMISCUOUS_MODE
 
 //==============================================================================
-// Currently Unused.
+// Multicast filter: maintain the chip's list of allowed multicast addresses.
+// Entries are reference counted because more than one group can map to the
+// same MAC address. Broadcast is always allowed.
 //==============================================================================
-bool set_incoming_mac_address_allowed(const uint8_t mac[ETH_HWADDR_LEN],bool allow) {
-  return false;
+bool set_incoming_mac_address_allowed(const uint8_t mac[ETH_HWADDR_LEN],
+                                      const bool allow) {
+  if (mac == nullptr) {
+    return false;
+  }
+
+  // Unicast addresses other than ours are filtered by the chip anyway, and
+  // broadcast is always allowed
+  if ((mac[0] & 0x01) == 0) {
+    return allow;
+  }
+  static const uint8_t kBroadcast[ETH_HWADDR_LEN]{0xff, 0xff, 0xff,
+                                                  0xff, 0xff, 0xff};
+  if (std::memcmp(mac, kBroadcast, ETH_HWADDR_LEN) == 0) {
+    return allow;
+  }
+
+  MulticastEntry* found = nullptr;
+  MulticastEntry* freeEntry = nullptr;
+  for (MulticastEntry& e : s_mcastTable) {
+    if (e.refCount == 0) {
+      if (freeEntry == nullptr) {
+        freeEntry = &e;
+      }
+    } else if (std::memcmp(e.mac, mac, ETH_HWADDR_LEN) == 0) {
+      found = &e;
+    }
+  }
+
+  if (allow) {
+    if (found != nullptr) {
+      if (found->refCount == UINT16_MAX) {
+        return false;
+      }
+      found->refCount++;
+      return true;
+    }
+    if (freeEntry == nullptr) {  // The chip's list is full
+      return false;
+    }
+    std::memcpy(freeEntry->mac, mac, ETH_HWADDR_LEN);
+    freeEntry->refCount = 1;
+  } else {
+    if (found == nullptr) {
+      return true;  // Already not allowed
+    }
+    if (--found->refCount != 0) {
+      return true;  // Still used by another group
+    }
+  }
+
+  s_mcastDirty = true;
+  apply_multicast_list();
+  return true;
 }
 
 #endif
