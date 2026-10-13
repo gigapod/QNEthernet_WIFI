@@ -1,3 +1,7 @@
+// Only compile when the CYW4343W driver is selected
+#include "qnethernet/driver_select.h"
+#if defined(QNETHERNET_INTERNAL_DRIVER_CYW4343W)
+
 // PicoWi IP functions, see http://iosoft.blog/picowi for details
 //
 // Copyright (c) 2022, Jeremy P Bentham
@@ -39,7 +43,8 @@ extern uint8_t my_mac[6];
 extern int display_mode;
 extern IOCTL_MSG ioctl_txmsg, ioctl_rxmsg;
 
-Event local;
+// The one Event instance; the event handlers and state are shared.
+Event evt;
 static event_handler_t event_handlers[MAX_HANDLERS];
 EVENT_INFO event_info;
 // Event field displays
@@ -109,7 +114,7 @@ int Event::ip_add_hdr(uint8_t *buff, IPADDR dip, uint8_t pcol, uint16_t dlen) {
     ip_cpy(ip->dip, dip);
     ip->len = htons(dlen + sizeof(IPHDR));
     ip->check = 0;
-    ip->check = 0xffff ^ local.add_csum(0, ip, sizeof(IPHDR));
+    ip->check = 0xffff ^ add_csum(0, ip, sizeof(IPHDR));
     return(sizeof(IPHDR));
 }
 
@@ -245,3 +250,5 @@ void Event::print_mac_addr(MACADDR mac) {
   printf("%02X:%02X:%02X:%02X:%02X:%02X",
          mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
 }
+
+#endif  // QNETHERNET_INTERNAL_DRIVER_CYW4343W

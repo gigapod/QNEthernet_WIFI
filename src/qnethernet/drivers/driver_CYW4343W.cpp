@@ -29,7 +29,6 @@
 // Chip state shared with the cyw4343w sources
 extern W4343WCard WIFIcard;
 extern Join join;
-extern Event evt;
 extern EVENT_INFO event_info;
 extern EVT_STR join_evts[];
 extern Scan scn;

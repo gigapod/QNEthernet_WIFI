@@ -1,3 +1,7 @@
+// Only compile when the CYW4343W driver is selected
+#include "qnethernet/driver_select.h"
+#if defined(QNETHERNET_INTERNAL_DRIVER_CYW4343W)
+
 /**
  * Copyright (c) 2011-2021 Bill Greiman
  * This file is part of the SdFat library for SD memory cards.
@@ -1644,3 +1648,5 @@ void cwydump(unsigned char *memory, unsigned int len) {
 //==============================================================================
 
 // END
+
+#endif  // QNETHERNET_INTERNAL_DRIVER_CYW4343W

@@ -273,7 +273,6 @@ private:
   void ip_cpy(uint8_t *dest, uint8_t *src);
   void print_ip_addr(IPADDR a);
   void print_mac_addr(MACADDR mac);
-  uint8_t txbuff[TXDATA_LEN];
   uint8_t sd_tx_seq;
   uint8_t eventbuf[RXDATA_LEN];
   uint8_t event_mask[EVENT_MAX / 8];
@@ -292,6 +291,10 @@ private:
 				   .flags=0x20}
 				  };
 };
+// The one Event instance, defined in event.cpp. Use this rather than creating
+// more; each instance has large frame buffers.
+extern Event evt;
+
 //==============================================================================
 // EOF
 #endif

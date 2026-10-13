@@ -1,3 +1,7 @@
+// Only compile when the CYW4343W driver is selected
+#include "qnethernet/driver_select.h"
+#if defined(QNETHERNET_INTERNAL_DRIVER_CYW4343W)
+
 // join.cpp
 
 #include "cyw43_T4_SDIO.h"
@@ -7,7 +11,6 @@
 
 extern W4343WCard WIFIcard;
 extern EVENT_INFO event_info;
-Event joinevt;
 EVT_STR no_evts[] = NO_EVTS;
 EVT_STR join_evts[] = JOIN_EVTS;
 
@@ -43,7 +46,7 @@ bool Join::join_start(const char *ssID, const char *passphrase, int security) {
   } else {
     printf(SER_ERROR "\nFailed to set country\n" SER_RESET);
   }
-  if (joinevt.ioctl_enable_evts(no_evts) == true) {
+  if (evt.ioctl_enable_evts(no_evts) == true) {
 #if INIT_DEBUG_MODE == true
     printf(SER_TRACE "\nNo events enabled\n" SER_RESET);
 #endif
@@ -65,7 +68,7 @@ bool Join::join_start(const char *ssID, const char *passphrase, int security) {
     CHECK(WIFIcard.ioctl_wr_int32, WLC_SET_WSEC, 0, 0);
     CHECK(WIFIcard.ioctl_wr_int32, WLC_SET_WPA_AUTH, 0, 0);
   }
-  if (joinevt.ioctl_enable_evts(join_evts) > 0) {
+  if (evt.ioctl_enable_evts(join_evts) > 0) {
 #if INIT_DEBUG_MODE == true
     printf(SER_TRACE "Join events enabled\n" SER_RESET);
 #endif
@@ -233,3 +236,5 @@ int Join::join_check(void) {
   EVENT_INFO *eip=&event_info;
     return((eip->join&JOIN_OK) == JOIN_OK ? 2 : eip->join == JOIN_FAIL ? -1 : 0);
 }
+
+#endif  // QNETHERNET_INTERNAL_DRIVER_CYW4343W

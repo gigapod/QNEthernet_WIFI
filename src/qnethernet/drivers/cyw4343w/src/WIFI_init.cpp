@@ -1,3 +1,7 @@
+// Only compile when the CYW4343W driver is selected
+#include "qnethernet/driver_select.h"
+#if defined(QNETHERNET_INTERNAL_DRIVER_CYW4343W)
+
 // WIFI_init.cpp
 
 #include "cyw43_T4_SDIO.h"
@@ -6,7 +10,6 @@
 
 extern W4343WCard WIFIcard;
 Join join;
-Event evt;
 MACADDR llmac;
 
 bool WIFIboot() {
@@ -37,3 +40,5 @@ bool WIFIboot() {
   WIFIcard.getMACAddress(llmac); // Get Low Level MAC Addrees.
   return true;
 }
+
+#endif  // QNETHERNET_INTERNAL_DRIVER_CYW4343W

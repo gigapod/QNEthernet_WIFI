@@ -1,3 +1,7 @@
+// Only compile when the CYW4343W driver is selected
+#include "qnethernet/driver_select.h"
+#if defined(QNETHERNET_INTERNAL_DRIVER_CYW4343W)
+
 // Scan.cpp
 
 #include <stdio.h>
@@ -13,7 +17,6 @@
 
 extern W4343WCard WIFIcard;
 extern sdpcm_header_t iehh;
-Event scnevt;
 Scan scn;
 extern uint8_t scan_count;
 //simple_scan_result_t filtered_scan_results[MAX_SCAN_ENTRIES] = {};
@@ -81,7 +84,7 @@ int Scan::scan_start(void) {
     int ret;
     
   scan_count = 0; // Zero out scan entry counter.
-  scnevt.ioctl_enable_evts((EVT_STR *)escan_evts); // Enable scan events.
+  evt.ioctl_enable_evts((EVT_STR *)escan_evts); // Enable scan events.
   ret = WIFIcard.ioctl_wr_int32(WLC_SET_SCAN_CHANNEL_TIME, 10, SCAN_CHAN_TIME) > 0 &&
         WIFIcard.ioctl_set_uint32("pm2_sleep_ret", IOCTL_WAIT, 0xc8) > 0 &&
         WIFIcard.ioctl_set_uint32("bcn_li_bcn", IOCTL_WAIT, 1) > 0 &&
@@ -249,3 +252,5 @@ uint32_t Scan::parseScanResult(ESCAN_RESULT *evsrp) {
 simple_scan_result_t *Scan::getScanResults(void) {
   return scan_results;
 }
+
+#endif  // QNETHERNET_INTERNAL_DRIVER_CYW4343W
