@@ -18,6 +18,7 @@
 #include "lwip/debug.h"
 #include "lwip/dns.h"
 #include "lwip/err.h"
+#include "lwip/igmp.h"
 #include "lwip/ip.h"
 #include "lwip/prot/ip4.h"
 #include "lwip/sys.h"
@@ -177,13 +178,36 @@ bool EthernetUDP::beginMulticastWithReuse(const IPAddress& ip,
   return beginMulticast(ip, localPort, true);
 }
 
+// Joins or leaves a multicast group on all started interfaces, since the
+// socket isn't tied to one. This returns whether successful and sets errno
+// on error.
+static bool setMulticastMembership(const IPAddress& ip, const bool join) {
+#if LWIP_IGMP
+  const ip4_addr_t groupaddr{static_cast<uint32_t>(ip)};
+  const err_t err = join ? igmp_joingroup(IP4_ADDR_ANY4, &groupaddr)
+                         : igmp_leavegroup(IP4_ADDR_ANY4, &groupaddr);
+  if (err != ERR_OK) {
+    // ERR_VAL means there's no started interface
+    errno = (err == ERR_VAL) ? ENETDOWN : err_to_errno(err);
+    return false;
+  }
+  return true;
+#else
+  (void)ip;
+  (void)join;
+
+  errno = ENOSYS;
+  return false;
+#endif  // LWIP_IGMP
+}
+
 bool EthernetUDP::beginMulticast(const IPAddress& ip, const uint16_t localPort,
                                  const bool reuse) {
   if (!begin(localPort, reuse)) {
     return false;
   }
 
-  if (!Ethernet.joinGroup(ip)) {
+  if (!setMulticastMembership(ip, true)) {
     stop();
     return false;
   }
@@ -205,7 +229,7 @@ void EthernetUDP::stop() {
   }
 
   if (listeningMulticast_) {
-    (void)Ethernet.leaveGroup(multicastIP_);
+    (void)setMulticastMembership(multicastIP_, false);
     listeningMulticast_ = false;
     multicastIP_ = INADDR_NONE;
   }

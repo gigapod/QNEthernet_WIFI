@@ -30,21 +30,7 @@ TEENSY 4.1   WIFI Board
 - DHCP_T4.ino       An example of getting an IP address for the T4.1 using DHCP.
 - dns_T4.ino        An example of getting an IP address(S) and other information about a web site by name. pjrc.com is one example.
 - web_server_T4.ino A partially working example of a web server accessed by a web browser on a laptop or computer on your local network. See picowi docs link above.
-A few of the examples use a SSID, PASSPHRASE and SECURITY type. This info is setup in the "scr/secrets" file.
-
-```
-// The secrets file
-
-// SSID
-//#define MY_SSID            "yourssid"
-
-//PASSPHRASE
-//#define MY_PASSPHRASE      "yourpassphrase"
-
-// Security settings: 0 for none, 1 for WPA_TKIP, 2 for WPA2
-// The hard-coded password is for test purposes only!!!
-#define SECURITY        2
-```
+The network to join is set at runtime with `WiFi.begin(ssid, passphrase)` or `WiFi.setCredentials()`; see the main README.
 
  This is a complete re-write of https://github.com/wwatson4506/CYW4343W_t4 and adaption of picowi to the Teensy 4.1 and hopefully the DB5.
 

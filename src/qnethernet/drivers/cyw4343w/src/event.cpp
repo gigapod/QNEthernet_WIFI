@@ -1,3 +1,7 @@
+// Only compile when the CYW4343W driver is selected
+#include "qnethernet/driver_select.h"
+#if defined(QNETHERNET_INTERNAL_DRIVER_CYW4343W)
+
 // PicoWi IP functions, see http://iosoft.blog/picowi for details
 //
 // Copyright (c) 2022, Jeremy P Bentham
@@ -39,7 +43,8 @@ extern uint8_t my_mac[6];
 extern int display_mode;
 extern IOCTL_MSG ioctl_txmsg, ioctl_rxmsg;
 
-Event local;
+// The one Event instance; the event handlers and state are shared.
+Event evt;
 static event_handler_t event_handlers[MAX_HANDLERS];
 EVENT_INFO event_info;
 // Event field displays
@@ -109,7 +114,7 @@ int Event::ip_add_hdr(uint8_t *buff, IPADDR dip, uint8_t pcol, uint16_t dlen) {
     ip_cpy(ip->dip, dip);
     ip->len = htons(dlen + sizeof(IPHDR));
     ip->check = 0;
-    ip->check = 0xffff ^ local.add_csum(0, ip, sizeof(IPHDR));
+    ip->check = 0xffff ^ add_csum(0, ip, sizeof(IPHDR));
     return(sizeof(IPHDR));
 }
 
@@ -154,12 +159,57 @@ int Event::ioctl_enable_evts(EVT_STR *evtp) {
 // Poll events
 // =====================================================================
 int Event::pollEvents() {
-  int n, ret = 0;
+  const int n = read_frame(&iehh);
+  return (n > 0) ? route_frame(&iehh, n) : 0;
+}
+
+// =====================================================================
+// Frame routing
+// =====================================================================
+void Event::set_data_handler(data_handler_t fn) {
+  data_handler = fn;
+}
+
+int Event::read_frame(sdpcm_header_t *hp) {
+  return (int)ioctl_get_event(hp, eventbuf, sizeof(eventbuf));
+}
+
+int Event::route_frame(const sdpcm_header_t *hp, int n) {
+  switch (hp->sw_header.chan) {
+    case SDPCM_CHAN_EVT:
+      return handle_event_frame(hp, n);
+    case SDPCM_CHAN_DATA:
+      handle_data_frame(hp, n);
+      return 0;
+    default:  // Stray control frame
+      return 0;
+  }
+}
+
+// The payload (after the 12-byte SDPCM header) starts with any padding up to
+// hdrlen, then a 4-byte BDC header whose last byte is the number of 32-bit
+// words before the Ethernet frame.
+void Event::handle_data_frame(const sdpcm_header_t *hp, int n) {
+  if (data_handler == nullptr) {
+    return;
+  }
+  const int pad = hp->sw_header.hdrlen - (int)sizeof(sdpcm_header_t);
+  if (pad < 0 || pad + (int)sizeof(BDC_HDR_T4) > n) {
+    return;
+  }
+  const BDC_HDR_T4 *bdc = (const BDC_HDR_T4 *)&eventbuf[pad];
+  const int off = pad + (int)sizeof(BDC_HDR_T4) + bdc->offset * 4;
+  if (off >= n) {
+    return;
+  }
+  data_handler(&eventbuf[off], n - off);
+}
+
+int Event::handle_event_frame(const sdpcm_header_t *hp, int n) {
+  int ret = 0;
   EVENT_INFO *eip = &event_info;
-  
-  //Check for an event response
-  if((n=ioctl_get_event(&iehh, eventbuf, sizeof(eventbuf))) > 0) {
-    eip->chan = iehh.sw_header.chan; // chan = ctrl, evt or data.
+  {
+    eip->chan = hp->sw_header.chan; // chan = ctrl, evt or data.
     eip->flags = SWAP16(eep->event.msg.flags);
     eip->event_type = SWAP32(eep->event.msg.event_type);
     eip->status = SWAP32(eep->event.msg.status);
@@ -185,14 +235,16 @@ uint32_t Event::ioctl_get_event(sdpcm_header_t *hp, uint8_t *data, int maxlen) {
   if(res == true && hp->len > sizeof(sdpcm_header_t) && hp->notlen > 0 && hp->len == (hp->notlen^0xffff)) {
     dlen = hp->len - sizeof(sdpcm_header_t);  //Strip off sdpcm_header_t.
     while (n < dlen && n < maxlen) {
-      blklen = MIN(MIN(maxlen - n, hp->len - n), IOCTL_MAX_BLKLEN_T4);
+      blklen = MIN(MIN(maxlen - n, dlen - n), IOCTL_MAX_BLKLEN_T4);
       WIFIcard.cardCMD53_read(SD_FUNC_RAD, SB_32BIT_WIN, (uint8_t *)(&data[n]), blklen, false);
       n += blklen;
     }
     //Read and discard remaining bytes over maxlen
+    //Note: cardCMD53_read() doesn't read anything into a NULL buffer
+    static uint8_t discard[IOCTL_MAX_BLKLEN_T4] __attribute__((aligned(4)));
     while (n < dlen) {
-      blklen = MIN(hp->len - n, IOCTL_MAX_BLKLEN_T4);
-      WIFIcard.cardCMD53_read(SD_FUNC_RAD, SB_32BIT_WIN, 0, blklen, false);
+      blklen = MIN(dlen - n, IOCTL_MAX_BLKLEN_T4);
+      WIFIcard.cardCMD53_read(SD_FUNC_RAD, SB_32BIT_WIN, discard, blklen, false);
       n += blklen;
     }
   }
@@ -245,3 +297,5 @@ void Event::print_mac_addr(MACADDR mac) {
   printf("%02X:%02X:%02X:%02X:%02X:%02X",
          mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
 }
+
+#endif  // QNETHERNET_INTERNAL_DRIVER_CYW4343W

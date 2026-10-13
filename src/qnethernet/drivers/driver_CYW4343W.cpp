@@ -23,19 +23,91 @@
 
 #include "cyw4343w/src/cyw43_T4_SDIO.h"
 #include "cyw4343w/src/join.h"
-#include "../src/secrets.h"
+#include "cyw4343w/src/scan.h"
+#include "qnethernet/drivers/driver_CYW4343W_wifi.h"
+
+// Chip state shared with the cyw4343w sources
+extern W4343WCard WIFIcard;
+extern Join join;
+extern EVENT_INFO event_info;
+extern EVT_STR join_evts[];
+extern Scan scn;
 
 namespace qindesign {
 namespace network {
-namespace driver {
+namespace driver_cyw4343w {
 
-Join qnjoin;
-W4343WCard WIFIcard;
-Event evt;
-
-static int s_checkLinkStatusState = 0;
-uint32_t poll_ticks;
+static uint32_t poll_ticks;
 static struct LinkInfo s_linkInfo;
+
+// Network to join
+static char s_ssid[kMaxSSIDLen + 1]{'\0'};
+static char s_passphrase[kMaxPassphraseLen + 1]{'\0'};
+static Security s_security = Security::kWPA2;
+static bool s_credentialsChanged = false;
+
+// Whether the join state machine is running
+static bool s_joinEnabled = false;
+
+// --------------------------------------------------------------------------
+//  Receive Queue
+// --------------------------------------------------------------------------
+
+// Frames can be read outside proc_input() (while waiting for an ioctl
+// response or while scanning), so data frames are queued here.
+
+// The maximum number of frames proc_input() reads per call and per loop.
+static constexpr int kMaxFramesPerLoop = 8;
+
+static constexpr int kRxQueueSize = 8;
+static struct pbuf* s_rxQueue[kRxQueueSize];
+static int s_rxHead  = 0;
+static int s_rxCount = 0;
+
+// The netif, for checking the link state when queuing.
+static struct netif* s_netif = nullptr;
+
+// Removes and returns the oldest queued frame, or NULL if there are none.
+static struct pbuf* rx_dequeue() {
+  if (s_rxCount == 0) {
+    return nullptr;
+  }
+  struct pbuf* const p = s_rxQueue[s_rxHead];
+  s_rxHead = (s_rxHead + 1) % kRxQueueSize;
+  s_rxCount--;
+  return p;
+}
+
+// Frees all queued frames.
+static void rx_clear() {
+  while (s_rxCount > 0) {
+    (void)pbuf_free(rx_dequeue());
+  }
+}
+
+// Receives data frames from the frame router and queues them for the stack.
+static void on_data_frame(const uint8_t* const frame, const int len) {
+  if ((s_netif == nullptr) || !netif_is_link_up(s_netif) ||
+      (s_rxCount >= kRxQueueSize) || (len <= 0) ||
+      (len > static_cast<int>(MAX_FRAME_LEN))) {
+    LINK_STATS_INC(link.drop);
+    return;
+  }
+  struct pbuf* const p = pbuf_alloc(
+      PBUF_RAW, static_cast<uint16_t>(len + ETH_PAD_SIZE), PBUF_RAM);
+  if (p == nullptr) {
+    LINK_STATS_INC(link.memerr);
+    LINK_STATS_INC(link.drop);
+    return;
+  }
+  if (pbuf_take_at(p, frame, static_cast<uint16_t>(len), ETH_PAD_SIZE) !=
+      ERR_OK) {
+    LWIP_PLATFORM_ASSERT("Expected space for pbuf fill");
+  }
+  LINK_STATS_INC(link.recv);
+  s_rxQueue[(s_rxHead + s_rxCount) % kRxQueueSize] = p;
+  s_rxCount++;
+}
 
 FLASHMEM void get_capabilities(DriverCapabilities* const dc) {
   dc->isMACSettable                = false;
@@ -60,33 +132,57 @@ typedef enum {
 
 static enet_init_states_t s_initState = kInitStateStart;
 
-//==============================================================================
-// Get System MAC address.
-//==============================================================================
-void get_system_mac(uint8_t mac[ETH_HWADDR_LEN]) {
-  WIFIcard.getMACAddress((uint8_t *)mac);
+#if !QNETHERNET_ENABLE_PROMISCUOUS_MODE
+
+// --------------------------------------------------------------------------
+//  Multicast Filter
+// --------------------------------------------------------------------------
+
+// The chip accepts frames for up to this many multicast MAC addresses, set
+// with the "mcast_list" iovar: a 32-bit little-endian count followed by the
+// addresses.
+static constexpr int kMaxMulticastMACs = 10;
+
+struct MulticastEntry {
+  uint8_t mac[ETH_HWADDR_LEN];
+  uint16_t refCount;  // Zero means unused
+};
+static MulticastEntry s_mcastTable[kMaxMulticastMACs]{};
+
+// Whether the chip's list needs updating.
+static bool s_mcastDirty = false;
+
+// Sends the multicast list to the chip if it changed and the chip can take it
+// now. Otherwise, this is retried from poll().
+static void apply_multicast_list() {
+  if (!s_mcastDirty || W4343WCard::ioctlBusy ||
+      (s_initState != kInitStateInitialized)) {
+    return;
+  }
+
+  uint8_t buf[4 + kMaxMulticastMACs * ETH_HWADDR_LEN];
+  uint32_t count = 0;
+  for (const MulticastEntry& e : s_mcastTable) {
+    if (e.refCount != 0) {
+      std::memcpy(&buf[4 + count * ETH_HWADDR_LEN], e.mac, ETH_HWADDR_LEN);
+      count++;
+    }
+  }
+  buf[0] = static_cast<uint8_t>(count);
+  buf[1] = 0;
+  buf[2] = 0;
+  buf[3] = 0;
+
+  if (WIFIcard.ioctl_set_data("mcast_list", IOCTL_WAIT, buf,
+                              static_cast<int>(4 + count * ETH_HWADDR_LEN)) > 0) {
+    s_mcastDirty = false;
+  }
 }
 
-//==============================================================================
-// Get current MAC address.
-//==============================================================================
-bool get_mac(uint8_t mac[ETH_HWADDR_LEN]) {
-  if(qnjoin.join_check() != JOIN_OK) return false;
-  WIFIcard.getMACAddress((uint8_t *)mac);
-  return true;
-}
+#endif  // !QNETHERNET_ENABLE_PROMISCUOUS_MODE
 
 //==============================================================================
-// Set MAC address (Not resetable).
-//==============================================================================
-bool set_mac(const uint8_t mac[ETH_HWADDR_LEN]) {
-//  if(qnjoin.join_check() != JOIN_OK) return false;
-//  WIFIcard.getMACAddress((uint8_t *)mac);
-  return true;
-}
-
-//==============================================================================
-// Has Hardware.
+// Has Hardware. This boots the chip the first time.
 //==============================================================================
 bool has_hardware() {
   switch (s_initState) {
@@ -101,102 +197,194 @@ bool has_hardware() {
     default:
       break;
   }
-  // Init CYW4343W WIFI hardware and join network.
-  WIFIinit(MY_SSID, MY_PASSPHRASE, SECURITY);
+  s_initState = WIFIboot() ? kInitStateHasHardware : kInitStateNoHardware;
+  if (s_initState == kInitStateHasHardware) {
+    evt.set_data_handler(&on_data_frame);
+  }
+  return (s_initState != kInitStateNoHardware);
+}
+
+//==============================================================================
+// Get System MAC address.
+//==============================================================================
+void get_system_mac(uint8_t mac[ETH_HWADDR_LEN]) {
+  if (!has_hardware()) {
+    std::memset(mac, 0, ETH_HWADDR_LEN);
+    return;
+  }
+  WIFIcard.getMACAddress(mac);
+}
+
+//==============================================================================
+// Get current MAC address.
+//==============================================================================
+bool get_mac(uint8_t mac[ETH_HWADDR_LEN]) {
+  if (!has_hardware()) {
+    return false;
+  }
+  WIFIcard.getMACAddress(mac);
   return true;
 }
 
+//==============================================================================
+// Set MAC address (Not settable).
+//==============================================================================
+bool set_mac(const uint8_t mac[ETH_HWADDR_LEN]) {
+  (void)mac;
+  return true;
+}
 
 //==============================================================================
 // UNUSED.
 //==============================================================================
 void set_chip_select_pin(int pin) {
-	(void)pin;
+  (void)pin;
+}
+
+// Starts joining the configured network, if there is one.
+static void start_join() {
+  s_credentialsChanged = false;
+  if (s_ssid[0] == '\0') {
+    s_joinEnabled = false;
+    return;
+  }
+  event_info.join = JOIN_IDLE;
+  event_info.link = 0;
+  if (!join.join_start(s_ssid, s_passphrase, static_cast<int>(s_security))) {
+    // Let the join state machine retry
+    event_info.join = JOIN_FAIL;
+  }
+  s_joinEnabled = true;
 }
 
 //==============================================================================
-// Previously initialized. Marked initialized here.
+// Initialize: boot the chip if needed and start joining the network.
 //==============================================================================
 bool init(void) {
-  if (s_initState == kInitStateInitialized) {
-    return true;
-  } else {
-    s_initState = kInitStateInitialized;
-    return true;
+  if (!has_hardware()) {
+    return false;
   }
+  s_initState = kInitStateInitialized;
+  if (!s_joinEnabled || s_credentialsChanged) {
+    start_join();
+  }
+#if QNETHERNET_ENABLE_PROMISCUOUS_MODE
+  // There's no MAC filtering in promiscuous mode, so accept all multicast
+  (void)WIFIcard.ioctl_set_uint32("allmulti", IOCTL_WAIT, 1);
+#else
+  s_mcastDirty = true;
+  apply_multicast_list();
+#endif  // QNETHERNET_ENABLE_PROMISCUOUS_MODE
+  return true;
 }
 
 //==============================================================================
 // Leave network.
 //==============================================================================
 void deinit() {
-  qnjoin.join_stop();
+  rx_clear();
+  if (s_joinEnabled) {
+    join.join_stop();
+    s_joinEnabled = false;
+  }
+  event_info.join = JOIN_IDLE;
+  event_info.link = 0;
+  if (s_initState == kInitStateInitialized) {
+    s_initState = kInitStateHasHardware;
+  }
 }
 
 //==============================================================================
 // driver_proc_input().
 //==============================================================================
 struct pbuf* proc_input(struct netif *netif, int counter) {
-  // Finish any pending link and join status check
-  if(netif_is_link_up(netif) == 0) return NULL; 
-  sdpcm_header_t hp; // Get capy of WIFI header struct.
-  uint8_t bf[MAX_FRAME_LEN];
-  uint32_t data_len;
-  // Check for an available event frame.
-  if((data_len = evt.ioctl_get_event(&hp, bf, MAX_FRAME_LEN)) > 0) {
-    struct pbuf *p = pbuf_alloc(PBUF_RAW, data_len+ETH_PAD_SIZE, PBUF_RAM);
-    if (p == NULL) {
-      printf("Failed to allocate pbuf\n");
-      return NULL;
-    }
-    p->len = p->tot_len = data_len+ETH_PAD_SIZE+ETH_PAD_SIZE;
-    LWIP_ASSERT("Expected space for pbuf fill",
-      pbuf_take(p, (uint8_t *)bf+10, p->tot_len) == ERR_OK);
-    return p;
+  s_netif = netif;
+  if (W4343WCard::ioctlBusy || (s_initState != kInitStateInitialized)) {
+    return NULL;
   }
-  return NULL;
+  if (counter >= kMaxFramesPerLoop) {  // Give the rest of the program a turn
+    return NULL;
+  }
+
+  // Read frames until there's a data frame to return; events are handled
+  // along the way
+  for (int i = 0; (s_rxCount == 0) && (i < kMaxFramesPerLoop); i++) {
+    sdpcm_header_t hdr;
+    const int n = evt.read_frame(&hdr);
+    if (n <= 0) {
+      break;
+    }
+    (void)evt.route_frame(&hdr, n);
+  }
+  return rx_dequeue();
 }
 
 //==============================================================================
 // Poll network.
 //==============================================================================
 void poll(struct netif *netif) {
-  // Get any events, poll the joining state machine.
+  s_netif = netif;
+  if (W4343WCard::ioctlBusy || (s_initState != kInitStateInitialized)) {
+    return;
+  }
+  // Poll the joining state machine. Events, including join events, are read
+  // by proc_input().
   if(WIFIcard.ustimeout(&poll_ticks, EVENT_POLL_USEC)) {
-    evt.pollEvents(); // Check for an event frame.
     // Poll join status. Try to re-join if link is lost.
-    qnjoin.join_state_poll(MY_SSID, MY_PASSPHRASE, SECURITY);
+    if (s_joinEnabled) {
+      join.join_state_poll(s_ssid, s_passphrase, static_cast<int>(s_security));
+    }
     WIFIcard.ustimeout(&poll_ticks, 0); // Clear Polling timout counter.
   }
   // Check if link is up.
-  uint8_t link_state = qnjoin.join_check() ? LINK_UP : LINK_DOWN;
-  if (netif_is_link_up(netif) != link_state) {
-    if (link_state) {
-      printf("Setting link up\n");
+  const bool linkUp = s_joinEnabled && (join.join_check() == JOIN_OK);
+  if (static_cast<bool>(netif_is_link_up(netif)) != linkUp) {
+    if (linkUp) {
+#if !QNETHERNET_ENABLE_PROMISCUOUS_MODE
+      // Joining may reset the chip's multicast list, so send it again
+      s_mcastDirty = true;
+#endif  // !QNETHERNET_ENABLE_PROMISCUOUS_MODE
       netif_set_link_up(netif);
-      s_checkLinkStatusState = link_state; //
     } else {
-      printf("Setting link down\n");
       netif_set_link_down(netif);
-      s_checkLinkStatusState = link_state;
     }
   }
+
+#if !QNETHERNET_ENABLE_PROMISCUOUS_MODE
+  // Retry any multicast list update that couldn't be sent earlier
+  apply_multicast_list();
+#endif  // !QNETHERNET_ENABLE_PROMISCUOUS_MODE
 }
 
 //==============================================================================
 // 
 //==============================================================================
 err_t output(struct pbuf *p) {
-  uint8_t *buffer;
+  if (W4343WCard::ioctlBusy) {  // Can't use the bus now
+    LINK_STATS_INC(link.drop);
+    return ERR_IF;
+  }
+  // The pbuf starts with ETH_PAD_SIZE bytes of padding
+  if (p->tot_len <= ETH_PAD_SIZE) {
+    return ERR_BUF;
+  }
+  const uint16_t len = p->tot_len - ETH_PAD_SIZE;
+  if (len > TXDATA_LEN) {  // event_net_tx() doesn't check
+    return ERR_BUF;
+  }
   // Create a packet buffer.
-  buffer = (uint8_t *)malloc(p->tot_len*sizeof(uint8_t));
+  uint8_t *buffer = (uint8_t *)malloc(len);
+  if (buffer == NULL) {
+    return ERR_MEM;
+  }
   // Fill buffer with packet info.
-  const uint16_t copied = pbuf_copy_partial(p, buffer, p->tot_len, 0);
-  if (copied != p->tot_len) {
+  const uint16_t copied = pbuf_copy_partial(p, buffer, len, ETH_PAD_SIZE);
+  if (copied != len) {
+    free(buffer);
     return ERR_BUF;
   }
   // Transmit buffer.
-  evt.event_net_tx(buffer, copied + ETH_PAD_SIZE);
+  evt.event_net_tx(buffer, copied);
   free(buffer);  // Free buffer mem.
   return ERR_OK;
 }
@@ -206,14 +394,14 @@ err_t output(struct pbuf *p) {
 // Same as output.
 //==============================================================================
 bool output_frame(const void *frame, size_t len) {
-  if (len > (UINT16_MAX - ETH_PAD_SIZE)) {
+  if (W4343WCard::ioctlBusy) {  // Can't use the bus now
     return false;
   }
-  uint8_t *buffer;
-  buffer = (uint8_t *)malloc(len*sizeof(uint8_t));
-  (void)memcpy((uint8_t*)buffer + ETH_PAD_SIZE, frame, len);
-  evt.event_net_tx(buffer, len + ETH_PAD_SIZE);
-  free(buffer);
+  if (len > TXDATA_LEN) {  // event_net_tx() doesn't check
+    return false;
+  }
+  // The frame has no padding; event_net_tx() copies it
+  evt.event_net_tx(const_cast<void*>(frame), static_cast<int>(len));
   return true;
 }
 #endif
@@ -229,10 +417,64 @@ void get_link_info(struct LinkInfo* const li) {
 #if !QNETHERNET_ENABLE_PROMISCUOUS_MODE
 
 //==============================================================================
-// Currently Unused.
+// Multicast filter: maintain the chip's list of allowed multicast addresses.
+// Entries are reference counted because more than one group can map to the
+// same MAC address. Broadcast is always allowed.
 //==============================================================================
-bool set_incoming_mac_address_allowed(const uint8_t mac[ETH_HWADDR_LEN],bool allow) {
-  return false;
+bool set_incoming_mac_address_allowed(const uint8_t mac[ETH_HWADDR_LEN],
+                                      const bool allow) {
+  if (mac == nullptr) {
+    return false;
+  }
+
+  // Unicast addresses other than ours are filtered by the chip anyway, and
+  // broadcast is always allowed
+  if ((mac[0] & 0x01) == 0) {
+    return allow;
+  }
+  static const uint8_t kBroadcast[ETH_HWADDR_LEN]{0xff, 0xff, 0xff,
+                                                  0xff, 0xff, 0xff};
+  if (std::memcmp(mac, kBroadcast, ETH_HWADDR_LEN) == 0) {
+    return allow;
+  }
+
+  MulticastEntry* found = nullptr;
+  MulticastEntry* freeEntry = nullptr;
+  for (MulticastEntry& e : s_mcastTable) {
+    if (e.refCount == 0) {
+      if (freeEntry == nullptr) {
+        freeEntry = &e;
+      }
+    } else if (std::memcmp(e.mac, mac, ETH_HWADDR_LEN) == 0) {
+      found = &e;
+    }
+  }
+
+  if (allow) {
+    if (found != nullptr) {
+      if (found->refCount == UINT16_MAX) {
+        return false;
+      }
+      found->refCount++;
+      return true;
+    }
+    if (freeEntry == nullptr) {  // The chip's list is full
+      return false;
+    }
+    std::memcpy(freeEntry->mac, mac, ETH_HWADDR_LEN);
+    freeEntry->refCount = 1;
+  } else {
+    if (found == nullptr) {
+      return true;  // Already not allowed
+    }
+    if (--found->refCount != 0) {
+      return true;  // Still used by another group
+    }
+  }
+
+  s_mcastDirty = true;
+  apply_multicast_list();
+  return true;
 }
 
 #endif
@@ -244,7 +486,180 @@ bool is_unknown() {
   return s_initState == kInitStateStart;;
 }
 
-}  // namespace driver
+// --------------------------------------------------------------------------
+//  WiFi Functions
+// --------------------------------------------------------------------------
+
+bool set_credentials(const char* const ssid, const char* const passphrase,
+                     const Security security) {
+  if (ssid == nullptr) {
+    return false;
+  }
+  const size_t ssidLen = std::strlen(ssid);
+  if ((ssidLen == 0) || (ssidLen > kMaxSSIDLen)) {
+    return false;
+  }
+  const char* const pass =
+      ((security == Security::kOpen) || (passphrase == nullptr)) ? ""
+                                                                 : passphrase;
+  const size_t passLen = std::strlen(pass);
+  if ((security != Security::kOpen) &&
+      ((passLen < kMinPassphraseLen) || (passLen > kMaxPassphraseLen))) {
+    return false;
+  }
+
+  if ((std::strcmp(s_ssid, ssid) != 0) ||
+      (std::strcmp(s_passphrase, pass) != 0) || (s_security != security)) {
+    std::memcpy(s_ssid, ssid, ssidLen + 1);
+    std::memcpy(s_passphrase, pass, passLen + 1);
+    s_security = security;
+    s_credentialsChanged = true;
+  }
+  return true;
+}
+
+const char* ssid() {
+  return s_ssid;
+}
+
+JoinStatus join_status() {
+  if (!s_joinEnabled) {
+    return JoinStatus::kStopped;
+  }
+  switch (event_info.join) {
+    case JOIN_OK:
+      return JoinStatus::kJoined;
+    case JOIN_FAIL:
+      return JoinStatus::kFailed;
+    default:
+      return JoinStatus::kJoining;
+  }
+}
+
+bool rssi(int32_t* const value) {
+  if (join_status() != JoinStatus::kJoined) {
+    return false;
+  }
+  int32_t v = 0;
+  if (WIFIcard.ioctl_rd_data(WLC_GET_RSSI, IOCTL_WAIT, &v, sizeof(v)) <= 0) {
+    return false;
+  }
+  *value = v;
+  return true;
+}
+
+bool bssid(uint8_t mac[6]) {
+  if (join_status() != JoinStatus::kJoined) {
+    return false;
+  }
+  return (WIFIcard.ioctl_rd_data(WLC_GET_BSSID, IOCTL_WAIT, mac, 6) > 0);
+}
+
+// Number of results from the last scan.
+static int s_scanCount = 0;
+
+// Set when the scan-complete event arrives, whichever read path sees it.
+static volatile bool s_scanDone = false;
+
+// Wraps the scan event handler to note completion.
+static int scan_event_handler(EVENT_INFO* const eip) {
+  const int ret = Scan::scan_event_handler(eip);
+  if (ret < 0) {
+    s_scanDone = true;
+  }
+  return ret;
+}
+
+int scan(const uint32_t timeout) {
+  s_scanCount = 0;
+  if (!has_hardware()) {
+    return -1;
+  }
+
+  static bool handlerAdded = false;
+  if (!handlerAdded) {
+    if (!evt.add_event_handler(&scan_event_handler)) {
+      return -1;
+    }
+    handlerAdded = true;
+  }
+
+  // Note: This replaces the enabled events with the scan events
+  s_scanDone = false;
+  const bool started = scn.scan_start();
+  if (started) {
+    // Don't call yield() here so that the stack doesn't run (and possibly
+    // start ioctls) during the scan. Received data frames are queued, up to
+    // the queue size.
+    const uint32_t start = millis();
+    while (!s_scanDone && ((millis() - start) < timeout)) {
+      (void)evt.pollEvents();
+      delayMicroseconds(1000);
+    }
+    s_scanCount = scn.getScanCount();
+  }
+
+  // Restore the join events
+  if (s_joinEnabled) {
+    (void)evt.ioctl_enable_evts(join_evts);
+  }
+
+  return started ? s_scanCount : -1;
+}
+
+bool scan_result(const int index, ScanResult* const result) {
+  if ((index < 0) || (index >= s_scanCount) || (result == nullptr)) {
+    return false;
+  }
+  const simple_scan_result_t& r = scn.getFilteredScanResults()[index];
+  const size_t ssidLen = strnlen(reinterpret_cast<const char*>(r.ssid),
+                                 sizeof(r.ssid));
+  std::memcpy(result->ssid, r.ssid, ssidLen);
+  result->ssid[ssidLen] = '\0';
+  std::memcpy(result->bssid, r.bssid, sizeof(result->bssid));
+  result->rssi     = r.signal_strength;
+  result->channel  = r.channel;
+  result->security = r.security_mask;
+  return true;
+}
+
+// --------------------------------------------------------------------------
+//  Ops Table
+// --------------------------------------------------------------------------
+
+const DriverOps kDriverOps{
+    {'w', 'l'},
+    MTU,
+    MAX_FRAME_LEN,
+    -1 /* EthernetOtherHardware */,
+    false,
+    false,
+    &get_capabilities,
+    &is_unknown,
+    &get_system_mac,
+    &get_mac,
+    &set_mac,
+    &has_hardware,
+    &set_chip_select_pin,
+    &init,
+    &deinit,
+    &proc_input,
+    &poll,
+    &get_link_info,
+    nullptr,
+    &output,
+#if QNETHERNET_ENABLE_RAW_FRAME_SUPPORT
+    &output_frame,
+#endif  // QNETHERNET_ENABLE_RAW_FRAME_SUPPORT
+#if !QNETHERNET_ENABLE_PROMISCUOUS_MODE
+    &set_incoming_mac_address_allowed,
+#endif  // !QNETHERNET_ENABLE_PROMISCUOUS_MODE
+    nullptr,
+    nullptr,
+    nullptr,
+};
+
+}  // namespace driver_cyw4343w
 }  // namespace network
 }  // namespace qindesign
 

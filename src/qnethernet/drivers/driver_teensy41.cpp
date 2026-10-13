@@ -38,7 +38,7 @@
 
 namespace qindesign {
 namespace network {
-namespace driver {
+namespace driver_teensy41 {
 
 using namespace qindesign::hardware::imxrt1060;
 
@@ -1005,14 +1005,10 @@ FLASHMEM bool init() {
                      ;
 
   ENET::group->TACC = 0
-#if (CHECKSUM_GEN_UDP == 0) || \
-    (CHECKSUM_GEN_TCP == 0) || \
-    (CHECKSUM_GEN_ICMP == 0)
+#if QNETHERNET_INTERNAL_TEENSY41_HW_CHECKSUM_GEN
                       | ENET::TACC::PROCHK(1)  // Insert protocol checksum
-#endif  // not(Generate all checksums)
-#if CHECKSUM_GEN_IP == 0
                       | ENET::TACC::IPCHK(1)   // Insert IP header checksum
-#endif  // CHECKSUM_GEN_IP == 0
+#endif  // QNETHERNET_INTERNAL_TEENSY41_HW_CHECKSUM_GEN
 #if ETH_PAD_SIZE == 2
                       | ENET::TACC::SHIFT16(1)
 #endif  // ETH_PAD_SIZE == 2
@@ -1023,16 +1019,12 @@ FLASHMEM bool init() {
                       | ENET::RACC::SHIFT16(1)
 #endif  // ETH_PAD_SIZE == 2
                       | ENET::RACC::LINEDIS(1)  // Discard bad frames
-#if (CHECKSUM_CHECK_UDP == 0) && \
-    (CHECKSUM_CHECK_TCP == 0) && \
-    (CHECKSUM_CHECK_ICMP == 0)
+#if QNETHERNET_INTERNAL_TEENSY41_HW_CHECKSUM_CHECK
                       | ENET::RACC::PRODIS(1)   // Discard frames with incorrect protocol checksum
                                                 // Requires RSFL == 0
-#endif  // not(Check any checksums)
-#if CHECKSUM_CHECK_IP == 0
                       | ENET::RACC::IPDIS(1)    // Discard frames with incorrect IPv4 header checksum
                                                 // Requires RSFL == 0
-#endif  // CHECKSUM_CHECK_IP == 0
+#endif  // QNETHERNET_INTERNAL_TEENSY41_HW_CHECKSUM_CHECK
                       | ENET::RACC::PADREM(1)
                       ;
 
@@ -1365,7 +1357,43 @@ void reset_phy() {
   mdio_write(phy_regs::kRCSR, phy_vals::kRCSR_VALUE);
 }
 
-}  // namespace driver
+// --------------------------------------------------------------------------
+//  Ops Table
+// --------------------------------------------------------------------------
+
+const DriverOps kDriverOps{
+    {'e', 'n'},
+    MTU,
+    MAX_FRAME_LEN,
+    4 /* EthernetTeensy41 */,
+    static_cast<bool>(QNETHERNET_INTERNAL_TEENSY41_HW_CHECKSUM_GEN),
+    static_cast<bool>(QNETHERNET_INTERNAL_TEENSY41_HW_CHECKSUM_CHECK),
+    &get_capabilities,
+    &is_unknown,
+    &get_system_mac,
+    &get_mac,
+    &set_mac,
+    &has_hardware,
+    &set_chip_select_pin,
+    &init,
+    &deinit,
+    &proc_input,
+    &poll,
+    &get_link_info,
+    &set_link,
+    &output,
+#if QNETHERNET_ENABLE_RAW_FRAME_SUPPORT
+    &output_frame,
+#endif  // QNETHERNET_ENABLE_RAW_FRAME_SUPPORT
+#if !QNETHERNET_ENABLE_PROMISCUOUS_MODE
+    &set_incoming_mac_address_allowed,
+#endif  // !QNETHERNET_ENABLE_PROMISCUOUS_MODE
+    &notify_manual_link_state,
+    &restart_auto_negotiation,
+    &reset_phy,
+};
+
+}  // namespace driver_teensy41
 }  // namespace network
 }  // namespace qindesign
 

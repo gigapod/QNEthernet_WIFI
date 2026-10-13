@@ -1,3 +1,7 @@
+// Only compile when the CYW4343W driver is selected
+#include "qnethernet/driver_select.h"
+#if defined(QNETHERNET_INTERNAL_DRIVER_CYW4343W)
+
 // join.cpp
 
 #include "cyw43_T4_SDIO.h"
@@ -7,30 +11,17 @@
 
 extern W4343WCard WIFIcard;
 extern EVENT_INFO event_info;
-Event joinevt;
 EVT_STR no_evts[] = NO_EVTS;
 EVT_STR join_evts[] = JOIN_EVTS;
 
 // =====================================================================
-// Join Start (params stored in secrets.h)
+// Join Start
 // =====================================================================
 bool Join::join_start(const char *ssID, const char *passphrase, int security) {
 #if INIT_DEBUG_MODE == true
   printf(SER_YELLOW "In joinNetworks\n" SER_RESET);
 #endif
   join_stop(); // Make sure we are shut down before starting.
-  // Make sure we have changed the default SSID to your SSID in "QNEthernet_WIFI/src/secrets.h".
-  if(!strcmp(ssID,(const char *)"yourSSID")) {
-    printf("Error: The default SSID is being used.\n");
-    printf("In 'QNEthernet_WIFI/src/secrets.h' change 'yourSSID' to your WIFI router's SSID.\n");
-    return false;
-  }
-  // Make sure we have changed the default password to your password in "QNEthernet_WIFI/src/secrets.h".
-  if(!strcmp(passphrase,(const char *)"yourPWD")) {
-    printf("Error: The default password is being used.\n");
-    printf("In 'QNEthernet_WIFI/src/secrets.h' change 'yourPWD' to your WIFI router's password.\n");
-    return false;
-  }
   // Process SSID
   wlc_ssid_t ssid;
   ssid.SSID_len = strlen(ssID);
@@ -55,7 +46,7 @@ bool Join::join_start(const char *ssID, const char *passphrase, int security) {
   } else {
     printf(SER_ERROR "\nFailed to set country\n" SER_RESET);
   }
-  if (joinevt.ioctl_enable_evts(no_evts) == true) {
+  if (evt.ioctl_enable_evts(no_evts) == true) {
 #if INIT_DEBUG_MODE == true
     printf(SER_TRACE "\nNo events enabled\n" SER_RESET);
 #endif
@@ -77,7 +68,7 @@ bool Join::join_start(const char *ssID, const char *passphrase, int security) {
     CHECK(WIFIcard.ioctl_wr_int32, WLC_SET_WSEC, 0, 0);
     CHECK(WIFIcard.ioctl_wr_int32, WLC_SET_WPA_AUTH, 0, 0);
   }
-  if (joinevt.ioctl_enable_evts(join_evts) > 0) {
+  if (evt.ioctl_enable_evts(join_evts) > 0) {
 #if INIT_DEBUG_MODE == true
     printf(SER_TRACE "Join events enabled\n" SER_RESET);
 #endif
@@ -166,7 +157,7 @@ bool Join::join_restart(const char *ssid, const char *passwd, int security) {
 // =====================================================================
 int Join::join_event_handler(EVENT_INFO *eip) {
   int ret = 1;
-  uint16_t news; // Event type bit flag.
+  uint16_t news = eip->link; // Event type bit flag.
   if(eip->chan == SDPCM_CHAN_EVT) {
     news = eip->link;
     if(eip->event_type==WLC_E_LINK && eip->status==0) {
@@ -245,3 +236,5 @@ int Join::join_check(void) {
   EVENT_INFO *eip=&event_info;
     return((eip->join&JOIN_OK) == JOIN_OK ? 2 : eip->join == JOIN_FAIL ? -1 : 0);
 }
+
+#endif  // QNETHERNET_INTERNAL_DRIVER_CYW4343W

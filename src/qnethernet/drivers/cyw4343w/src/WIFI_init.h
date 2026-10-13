@@ -5,6 +5,8 @@
 #include "join.h"
 #include "event.h"
 
-int WIFIinit(const char *ssID, const char *passphrase, int security);
+// Boots the chip and registers the join event handler. This does not join a
+// network. This returns whether successful.
+bool WIFIboot();
 
 #endif

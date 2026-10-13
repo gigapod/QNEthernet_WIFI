@@ -228,7 +228,8 @@ bool EthernetFrameClass::endFrame() {
     return false;
   }
 
-  const bool retval = enet::output_frame(outFrame_.value.data.data(),
+  const bool retval = enet::output_frame(enet::primary_interface(),
+                                         outFrame_.value.data.data(),
                                          outFrame_.value.data.size());
   outFrame_.has_value = false;
   outFrame_.value.clear();
@@ -236,7 +237,7 @@ bool EthernetFrameClass::endFrame() {
 }
 
 bool EthernetFrameClass::send(const void* const frame, const size_t len) const {
-  return enet::output_frame(frame, len);
+  return enet::output_frame(enet::primary_interface(), frame, len);
 }
 
 size_t EthernetFrameClass::write(const uint8_t b) {

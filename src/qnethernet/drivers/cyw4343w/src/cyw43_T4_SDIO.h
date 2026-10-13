@@ -40,6 +40,11 @@ class W4343WCard;
 class W4343WCard {
  public:
 
+  // Whether an ioctl is in progress. While true, nothing else may access the
+  // bus: the ioctl wait calls delay(), which may call yield() and run the
+  // network stack.
+  static volatile bool ioctlBusy;
+
   bool begin(bool SDIOused, int8_t wlOnPin, int8_t wlIrqPin, int8_t extLPOPin = -1);
 
   uint8_t errorCode() const;

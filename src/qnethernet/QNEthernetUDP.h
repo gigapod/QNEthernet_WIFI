@@ -104,8 +104,9 @@ class EthernetUDP : public UDP,
   // If this returns false and there was an error then errno will be set.
   bool beginWithReuse(uint16_t localPort);
 
-  // Multicast functions make use of Ethernet.joinGroup(). These first call the
-  // appropriate `begin` functions.
+  // Multicast functions join the group on all started interfaces (Ethernet
+  // and, if compiled in, WiFi). An interface started afterwards won't be in
+  // the group. These first call the appropriate `begin` functions.
   //
   // These return true if successful and false otherwise.
   //
@@ -292,7 +293,7 @@ class EthernetUDP : public UDP,
   ATTRIBUTE_NODISCARD
   bool begin(uint16_t localPort, bool reuse);
 
-  // Multicast functions make use of Ethernet.joinGroup()
+  // Multicast functions join the group on all started interfaces
   //
   // If this returns false and there was an error then errno will be set.
   ATTRIBUTE_NODISCARD

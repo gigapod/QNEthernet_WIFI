@@ -1,19 +1,24 @@
+// Only compile when the CYW4343W driver is selected
+#include "qnethernet/driver_select.h"
+#if defined(QNETHERNET_INTERNAL_DRIVER_CYW4343W)
+
 // WIFI_init.cpp
 
 #include "cyw43_T4_SDIO.h"
 #include "misc_defs.h"
 #include "WIFI_init.h"
 
-using namespace qindesign::network::driver;
-
 extern W4343WCard WIFIcard;
 Join join;
-Event evt;
 MACADDR llmac;
 
-int WIFIinit(const char *ssID, const char *passphrase, int security) {
+bool WIFIboot() {
   // Add our event handler to the array of event handlers.
-  evt.add_event_handler(join.join_event_handler);
+  static bool handlerAdded = false;
+  if (!handlerAdded) {
+    evt.add_event_handler(join.join_event_handler);
+    handlerAdded = true;
+  }
   delayMicroseconds(1000);
 
   //////////////////////////////////////////
@@ -25,24 +30,15 @@ int WIFIinit(const char *ssID, const char *passphrase, int security) {
   // WIFIcard.begin(true, 33, 34, -1) for CYW4343W board or 
   // WIFIcard.begin(true, 30, 29, -1) for CYW43439 board. 
   //////////////////////////////////////////
-  if (WIFIcard.begin(true, REG_ON, WL_IRQ, -1) == true) { 
-    WIFIcard.wifiSetup(); // Only needed for wifi scan usage
-    WIFIcard.postInitSettings();
-    delay(500); // Give the CYW4343W time to settle in.
-    WIFIcard.getMACAddress(llmac); // Get Low Level MAC Addrees.
-    // Use "secrets.h" to set MY_SSID, MY_PASSPHRASE, SECURITY.
-    if(!join.join_start(ssID, passphrase, security)) {
-      printf("*************** Error: Join Network Failed! ***************\n");
-      while(1);
-    }
-    // Keep polling until link and join happens.
-    while((join.link_check() != LINK_OK) && (join.join_check() != JOIN_OK)) {
-      evt.pollEvents();
-      join.join_state_poll(ssID, passphrase, security);
-    }
-  } else {
+  if (WIFIcard.begin(true, REG_ON, WL_IRQ, -1) != true) {
     printf("*************** Initialization Failed! ****************\n");
-    return -1;
+    return false;
   }
-  return 1;
+  WIFIcard.wifiSetup(); // Only needed for wifi scan usage
+  WIFIcard.postInitSettings();
+  delay(500); // Give the CYW4343W time to settle in.
+  WIFIcard.getMACAddress(llmac); // Get Low Level MAC Addrees.
+  return true;
 }
+
+#endif  // QNETHERNET_INTERNAL_DRIVER_CYW4343W

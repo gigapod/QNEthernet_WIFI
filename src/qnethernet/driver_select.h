@@ -19,6 +19,7 @@
 #if __has_include(<qnethernet_external_driver.h>)
 #include <qnethernet_external_driver.h>
 #define QNETHERNET_INTERNAL_DRIVER_EXTERNAL
+#define QNETHERNET_INTERNAL_PRIMARY_DRIVER_OPS driver_external::kDriverOps
 #endif  // __has_include(<qnethernet_external_driver.h>)
 #endif  // defined(__has_include)
 
@@ -29,19 +30,47 @@
 // Don't include anything else if an external driver has been included
 #ifndef QNETHERNET_INTERNAL_DRIVER_EXTERNAL
 
+// QNETHERNET_INTERNAL_PRIMARY_DRIVER_OPS names the ops table (see DriverOps in
+// lwip_driver.h) of the driver bound to the `Ethernet` instance.
+// QNETHERNET_INTERNAL_WIFI_DRIVER_OPS, if defined, names the ops table of the
+// driver bound to the `WiFi` instance.
+
 #if defined(QNETHERNET_DRIVER_W5500)
-#include "qnethernet/drivers/driver_w5500.h"
 #define QNETHERNET_INTERNAL_DRIVER_W5500
-#endif
-#if ARDUINO_TEENSY41_CYW4343W
-#include "qnethernet/drivers/driver_CYW4343W.h"
-#define QNETHERNET_INTERNAL_DRIVER_CYW4343W
+#define QNETHERNET_INTERNAL_PRIMARY_DRIVER_OPS driver_w5500::kDriverOps
 #elif defined(ARDUINO_TEENSY41)
-#include "qnethernet/drivers/driver_teensy41.h"
 #define QNETHERNET_INTERNAL_DRIVER_TEENSY41
+#define QNETHERNET_INTERNAL_PRIMARY_DRIVER_OPS driver_teensy41::kDriverOps
+#if ARDUINO_TEENSY41_CYW4343W
+#define QNETHERNET_INTERNAL_DRIVER_CYW4343W
+#define QNETHERNET_INTERNAL_WIFI_DRIVER_OPS driver_cyw4343w::kDriverOps
+#define QNETHERNET_INTERNAL_MULTIPLE_DRIVERS
+#endif  // ARDUINO_TEENSY41_CYW4343W
 #else
-#include "qnethernet/drivers/driver_unsupported.h"
 #define QNETHERNET_INTERNAL_DRIVER_UNSUPPORTED
+#define QNETHERNET_INTERNAL_PRIMARY_DRIVER_OPS driver_unsupported::kDriverOps
 #endif  // Driver selection
+
+// Include the driver headers after the selection so they can see what else
+// is compiled in. When more than one driver is compiled in, their headers must
+// agree on MTU, MAX_FRAME_LEN, and ETH_PAD_SIZE, and checksum offloading is
+// chosen per netif.
+
+#if defined(QNETHERNET_INTERNAL_MULTIPLE_DRIVERS)
+#define LWIP_CHECKSUM_CTRL_PER_NETIF 1
+#endif  // QNETHERNET_INTERNAL_MULTIPLE_DRIVERS
+
+#if defined(QNETHERNET_INTERNAL_DRIVER_W5500)
+#include "qnethernet/drivers/driver_w5500.h"
+#endif
+#if defined(QNETHERNET_INTERNAL_DRIVER_TEENSY41)
+#include "qnethernet/drivers/driver_teensy41.h"
+#endif
+#if defined(QNETHERNET_INTERNAL_DRIVER_CYW4343W)
+#include "qnethernet/drivers/driver_CYW4343W.h"
+#endif
+#if defined(QNETHERNET_INTERNAL_DRIVER_UNSUPPORTED)
+#include "qnethernet/drivers/driver_unsupported.h"
+#endif
 
 #endif  // QNETHERNET_INTERNAL_DRIVER_EXTERNAL
