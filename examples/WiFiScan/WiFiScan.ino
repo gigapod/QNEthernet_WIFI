@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: (c) 2026 Shawn Silverman <shawn@pobox.com>
+// SPDX-FileCopyrightText: (c) 2026 Kirk Benell
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// cyw43_scan scans for WiFi networks every few seconds and prints them.
+// WiFiScan scans for WiFi networks every few seconds and prints them. It
+// doesn't join a network, so it's a good first check that the chip works.
 //
 // This needs a Teensy 4.1 with the CYW4343W WiFi shield, and the
 // `ARDUINO_TEENSY41_CYW4343W` macro defined to `1`.

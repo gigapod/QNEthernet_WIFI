@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2026 Shawn Silverman <shawn@pobox.com>
+// SPDX-FileCopyrightText: (c) 2026 Kirk Benell
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // EthernetAndWiFi brings up the wired Ethernet and WiFi interfaces at the same
@@ -6,7 +6,7 @@
 //
 // This needs a Teensy 4.1 with the CYW4343W WiFi shield, and the
 // `ARDUINO_TEENSY41_CYW4343W` macro defined to `1`. Set your network's SSID
-// and passphrase below.
+// and passphrase below or with build flags.
 //
 // This file is part of the QNEthernet library.
 
@@ -22,8 +22,13 @@ using namespace qindesign::network;
 //  Configuration
 // --------------------------------------------------------------------------
 
-constexpr char kSSID[]{"yourSSID"};
-constexpr char kPassphrase[]{"yourPassphrase"};  // Empty for an open network
+// Set these here or with build flags, for example: -DWIFI_SSID=\"mySSID\"
+#ifndef WIFI_SSID
+#define WIFI_SSID "yourSSID"
+#endif
+#ifndef WIFI_PASSPHRASE
+#define WIFI_PASSPHRASE "yourPassphrase"  // Empty for an open network
+#endif
 
 constexpr uint32_t kDHCPTimeout = 15000;  // 15 seconds
 
@@ -82,8 +87,8 @@ void setup() {
   if (!Ethernet.begin()) {
     printf("Failed to start Ethernet\r\n");
   }
-  printf("Starting WiFi with DHCP, joining \"%s\"...\r\n", kSSID);
-  if (!WiFi.begin(kSSID, kPassphrase)) {
+  printf("Starting WiFi with DHCP, joining \"%s\"...\r\n", WIFI_SSID);
+  if (!WiFi.begin(WIFI_SSID, WIFI_PASSPHRASE)) {
     printf("Failed to start WiFi\r\n");
   }
 

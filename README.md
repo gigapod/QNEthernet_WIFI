@@ -4,7 +4,7 @@
 - Added support for the CYW43439 WIFI chip (see below). 
 - Added a print debug switch to enable or disable printing debug information during initialization. Will be expanded later.
 - Removed more unused code.
-- Fixed "cyw43_scan.ino". Is now stable and repeatable.
+- Fixed the scan example (now "WiFiScan"). Is now stable and repeatable.
 - Reworked WIFI initialization and join API.
 
 ## This library is a rework of QNEthernet v0.37.0 with support for the CYW4343W and CYW43439 WiFI devices. 
@@ -61,7 +61,25 @@ Notes:
 - The default route is `Ethernet` whenever it's started; use `setAsDefaultInterface()` to change it.
 - `scanNetworks()` blocks; a few frames received over WiFi during the scan are queued and the rest are dropped.
 
-See the "EthernetAndWiFi", "WiFiUDPEcho", and "cyw43_scan" examples.
+### WiFi examples
+
+Each has a README.md with what it does, how to run it, and what to check. Set `WIFI_SSID` and `WIFI_PASSPHRASE` in the sketch or with build flags (`-DWIFI_SSID=\"mySSID\" -DWIFI_PASSPHRASE=\"myPassphrase\"`).
+
+| Example | Tests |
+|---|---|
+| [WiFiScan](examples/WiFiScan) | Chip boot and scanning; doesn't join a network |
+| [WiFiConnect](examples/WiFiConnect) | Joining with DHCP, status changes, connection details, timing |
+| [WiFiStaticIP](examples/WiFiStaticIP) | Joining with a static address |
+| [WiFiLinkMonitor](examples/WiFiLinkMonitor) | Link, address, and status events; rejoining after the access point drops |
+| [WiFiPing](examples/WiFiPing) | Data path and DNS, with loss and latency statistics |
+| [WiFiHTTPClient](examples/WiFiHTTPClient) | DNS and TCP client |
+| [WiFiUDPEcho](examples/WiFiUDPEcho) | UDP and TCP servers, tested from another computer |
+| [WiFiMulticast](examples/WiFiMulticast) | Multicast receive (the chip's multicast filter) and send |
+| [WiFiTCPThroughput](examples/WiFiTCPThroughput) | Receive throughput under load |
+| [WiFiBeginEndCycle](examples/WiFiBeginEndCycle) | Starting and stopping WiFi repeatedly |
+| [EthernetAndWiFi](examples/EthernetAndWiFi) | Wired Ethernet and WiFi running together |
+
+A suggested order: WiFiScan, WiFiConnect, WiFiPing, then the rest.
 
 There is one more define that switches between using the CYW4343W or the CYW43439 boards. Most likley you will be using the CYW43439 device.
 The following define is located in "QNEthernet_WIFI_0.37.0/src/qnethernet/drivers/cyw4343w/src/misc_defs.h" and chooses which WIFI device you are using, CYW43439 or CYW4343W device.
