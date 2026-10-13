@@ -38,7 +38,7 @@
 
 namespace qindesign {
 namespace network {
-namespace driver {
+namespace driver_teensy41 {
 
 using namespace qindesign::hardware::imxrt1060;
 
@@ -1365,7 +1365,41 @@ void reset_phy() {
   mdio_write(phy_regs::kRCSR, phy_vals::kRCSR_VALUE);
 }
 
-}  // namespace driver
+// --------------------------------------------------------------------------
+//  Ops Table
+// --------------------------------------------------------------------------
+
+const DriverOps kDriverOps{
+    {'e', 'n'},
+    MTU,
+    MAX_FRAME_LEN,
+    4 /* EthernetTeensy41 */,
+    &get_capabilities,
+    &is_unknown,
+    &get_system_mac,
+    &get_mac,
+    &set_mac,
+    &has_hardware,
+    &set_chip_select_pin,
+    &init,
+    &deinit,
+    &proc_input,
+    &poll,
+    &get_link_info,
+    &set_link,
+    &output,
+#if QNETHERNET_ENABLE_RAW_FRAME_SUPPORT
+    &output_frame,
+#endif  // QNETHERNET_ENABLE_RAW_FRAME_SUPPORT
+#if !QNETHERNET_ENABLE_PROMISCUOUS_MODE
+    &set_incoming_mac_address_allowed,
+#endif  // !QNETHERNET_ENABLE_PROMISCUOUS_MODE
+    &notify_manual_link_state,
+    &restart_auto_negotiation,
+    &reset_phy,
+};
+
+}  // namespace driver_teensy41
 }  // namespace network
 }  // namespace qindesign
 

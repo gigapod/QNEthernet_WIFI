@@ -27,7 +27,7 @@
 
 namespace qindesign {
 namespace network {
-namespace driver {
+namespace driver_cyw4343w {
 
 Join qnjoin;
 W4343WCard WIFIcard;
@@ -244,7 +244,41 @@ bool is_unknown() {
   return s_initState == kInitStateStart;;
 }
 
-}  // namespace driver
+// --------------------------------------------------------------------------
+//  Ops Table
+// --------------------------------------------------------------------------
+
+const DriverOps kDriverOps{
+    {'w', 'l'},
+    MTU,
+    MAX_FRAME_LEN,
+    -1 /* EthernetOtherHardware */,
+    &get_capabilities,
+    &is_unknown,
+    &get_system_mac,
+    &get_mac,
+    &set_mac,
+    &has_hardware,
+    &set_chip_select_pin,
+    &init,
+    &deinit,
+    &proc_input,
+    &poll,
+    &get_link_info,
+    nullptr,
+    &output,
+#if QNETHERNET_ENABLE_RAW_FRAME_SUPPORT
+    &output_frame,
+#endif  // QNETHERNET_ENABLE_RAW_FRAME_SUPPORT
+#if !QNETHERNET_ENABLE_PROMISCUOUS_MODE
+    &set_incoming_mac_address_allowed,
+#endif  // !QNETHERNET_ENABLE_PROMISCUOUS_MODE
+    nullptr,
+    nullptr,
+    nullptr,
+};
+
+}  // namespace driver_cyw4343w
 }  // namespace network
 }  // namespace qindesign
 

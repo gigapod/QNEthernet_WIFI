@@ -488,8 +488,13 @@ class EthernetClass final {
  private:
   static constexpr uint32_t kPollInterval = 125;  // About 8 times a second
 
-  // Creates a new network interface. The MAC address will be unset.
+  // Creates a new network interface bound to the primary driver. The MAC
+  // address will be unset.
   EthernetClass();
+
+  // Creates a new network interface bound to the given interface. The MAC
+  // address will be unset.
+  explicit EthernetClass(enet::Interface* iface);
 
   ~EthernetClass() noexcept;
 
@@ -524,6 +529,9 @@ class EthernetClass final {
              const IPAddress& netmask,
              const IPAddress& gateway,
              const IPAddress* dns);
+
+  // The driver and its netif state
+  enet::Interface* const iface_;
 
   // Driver configuration
   DriverCapabilities driverCapabilities_;

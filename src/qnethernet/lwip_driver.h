@@ -45,20 +45,24 @@ static_assert(ETH_PAD_SIZE <= UINT16_MAX, "ETH_PAD_SIZE must be <= UINT16_MAX");
 // How to create a driver:
 // 1. Create a header that defines MTU and MAX_FRAME_LEN. Don't forget to use
 //    either `#pragma once` or a #define guard.
-// 2. Create driver source and include lwip_driver.h. Implement all the
-//    `driver::x()` functions.
-// 3. Adjust the driver selection logic in driver_select.h to define an
+// 2. Create driver source and include lwip_driver.h. Implement the driver
+//    functions inside a driver-specific namespace (for example,
+//    `driver_y`) and define a `const DriverOps kDriverOps` in that namespace
+//    that points to them. See DriverOps for which functions are optional.
+// 3. Declare the ops table below, next to the others, and point
+//    QNETHERNET_INTERNAL_PRIMARY_DRIVER_OPS at it in driver_select.h.
+// 4. Adjust the driver selection logic in driver_select.h to define an
 //    appropriate macro (such as INTERNAL_DRIVER_Y) when the desired driver
 //    condition is satisfied.
-// 4. Include your driver header in the correct place in driver_select.h.
-// 5. In your driver source, gate the whole file(s) on the macro you chose
+// 5. Include your driver header in the correct place in driver_select.h.
+// 6. In your driver source, gate the whole file(s) on the macro you chose
 //    above. Of course, test the macro after the lwip_driver.h include.
 //    (Example: INTERNAL_DRIVER_Y)
-// 6. Add lwIP options (see lwip/opt.h) with appropriate values for your driver.
+// 7. Add lwIP options (see lwip/opt.h) with appropriate values for your driver.
 //    For example, Ethernet padding, checksum generation, and checksum checking.
-// 7. Optionally update EthernetClass::hardwareStatus() to return an appropriate
-//    enum value. If no change is made, the default 'EthernetOtherHardware' will
-//    be returned if hardware is found (driver::has_hardware() returns true).
+// 8. Optionally set DriverOps::hardware_status to an appropriate
+//    EthernetHardwareStatus value. If set to -1 ('EthernetOtherHardware'), that
+//    will be returned if hardware is found (has_hardware() returns true).
 
 // How to create an external driver that isn't inside the distribution:
 // 1. Create a header named "qnethernet_external_driver.h" that defines MTU and
@@ -67,7 +71,8 @@ static_assert(ETH_PAD_SIZE <= UINT16_MAX, "ETH_PAD_SIZE must be <= UINT16_MAX");
 // 2. Add lwIP options (see lwip/opt.h) with appropriate values for your driver.
 //    For example, Ethernet padding, checksum generation, and checksum checking.
 // 3. Create driver source and include lwip_driver.h. Implement all the
-//    `driver::x()` functions.
+//    `driver::x()` functions. The library wraps these in an ops table
+//    (see driver_external.cpp).
 
 namespace qindesign {
 namespace network {
@@ -119,6 +124,70 @@ struct LinkSettings {
 //  Driver Interface
 // --------------------------------------------------------------------------
 
+// A driver's function table. Each driver defines one of these so that more
+// than one driver can be compiled in and used at the same time. See the
+// `driver` namespace below for a description of each function.
+//
+// It can be assumed that any parameters passed in will not be NULL.
+//
+// Functions marked "optional" may be NULL; callers check before calling.
+struct DriverOps {
+  // Interface name prefix, for example "en" or "wl".
+  char ifname[2];
+
+  // The MTU and the maximum frame length (not including the 4-byte FCS).
+  size_t mtu;
+  size_t max_frame_len;
+
+  // An EthernetHardwareStatus value to report when hardware is found.
+  int hardware_status;
+
+  void (*get_capabilities)(DriverCapabilities* dc);
+  bool (*is_unknown)();
+  void (*get_system_mac)(uint8_t mac[ETH_HWADDR_LEN]);
+  bool (*get_mac)(uint8_t mac[ETH_HWADDR_LEN]);
+  bool (*set_mac)(const uint8_t mac[ETH_HWADDR_LEN]);
+  bool (*has_hardware)();
+  void (*set_chip_select_pin)(int pin);  // Optional
+  bool (*init)();
+  void (*deinit)();
+  struct pbuf* (*proc_input)(struct netif* netif, int counter);
+  void (*poll)(struct netif* netif);
+  void (*get_link_info)(LinkInfo* li);
+  bool (*set_link)(const LinkSettings* ls);  // Optional
+  err_t (*output)(struct pbuf* p);
+#if QNETHERNET_ENABLE_RAW_FRAME_SUPPORT
+  bool (*output_frame)(const void* frame, size_t len);  // Optional
+#endif  // QNETHERNET_ENABLE_RAW_FRAME_SUPPORT
+#if !QNETHERNET_ENABLE_PROMISCUOUS_MODE
+  bool (*set_incoming_mac_address_allowed)(const uint8_t mac[ETH_HWADDR_LEN],
+                                           bool allow);  // Optional
+#endif  // !QNETHERNET_ENABLE_PROMISCUOUS_MODE
+  void (*notify_manual_link_state)(bool flag);  // Optional
+  void (*restart_auto_negotiation)();           // Optional
+  void (*reset_phy)();                          // Optional
+};
+
+// Ops tables for the compiled-in drivers
+#if defined(QNETHERNET_INTERNAL_DRIVER_EXTERNAL)
+namespace driver_external { extern const DriverOps kDriverOps; }
+#endif
+#if defined(QNETHERNET_INTERNAL_DRIVER_W5500)
+namespace driver_w5500 { extern const DriverOps kDriverOps; }
+#endif
+#if defined(QNETHERNET_INTERNAL_DRIVER_CYW4343W)
+namespace driver_cyw4343w { extern const DriverOps kDriverOps; }
+#endif
+#if defined(QNETHERNET_INTERNAL_DRIVER_TEENSY41)
+namespace driver_teensy41 { extern const DriverOps kDriverOps; }
+#endif
+#if defined(QNETHERNET_INTERNAL_DRIVER_UNSUPPORTED)
+namespace driver_unsupported { extern const DriverOps kDriverOps; }
+#endif
+
+// The function interface an external driver implements. Internal drivers
+// implement the same functions in their own namespaces and expose them via
+// a DriverOps table.
 namespace driver {
 
 // It can be assumed that any parameters passed in will not be NULL.
@@ -266,67 +335,83 @@ void reset_phy();
 
 namespace enet {
 
+// A network interface: a driver plus its lwIP netif and related state.
+struct Interface;
+
+// Returns the primary interface, the one bound to the `Ethernet` instance.
+ATTRIBUTE_NODISCARD
+Interface* primary_interface();
+
+// Returns the interface's driver ops.
+ATTRIBUTE_NODISCARD
+const DriverOps& driver_ops(const Interface* iface);
+
 // Returns the MTU.
 ATTRIBUTE_NODISCARD
-inline size_t get_mtu() {
-  return MTU;
+inline size_t get_mtu(const Interface* const iface) {
+  return driver_ops(iface).mtu;
 }
 
 // Returns the maximum frame length. This does not include the 4-byte FCS (frame
 // check sequence).
 ATTRIBUTE_NODISCARD
-inline size_t get_max_frame_len() {
-  return MAX_FRAME_LEN;
+inline size_t get_max_frame_len(const Interface* const iface) {
+  return driver_ops(iface).max_frame_len;
 }
 
 // Gets the built-in Ethernet MAC address. This does nothing if 'mac' is NULL.
 //
 // For systems without a built-in address, this should retrieve some default.
-void get_system_mac(uint8_t mac[ETH_HWADDR_LEN]);
+void get_system_mac(Interface* iface, uint8_t mac[ETH_HWADDR_LEN]);
 
 // Gets the current MAC address and returns whether it was retrieved. This does
 // nothing if 'mac' is NULL.
 ATTRIBUTE_NODISCARD
-bool get_mac(uint8_t mac[ETH_HWADDR_LEN]);
+bool get_mac(Interface* iface, uint8_t mac[ETH_HWADDR_LEN]);
 
 // Sets the current MAC address and returns whether it was changed. This does
 // nothing if 'mac' is NULL.
 ATTRIBUTE_NODISCARD
-bool set_mac(const uint8_t mac[ETH_HWADDR_LEN]);
+bool set_mac(Interface* iface, const uint8_t mac[ETH_HWADDR_LEN]);
 
-// Initializes Ethernet and returns whether successful. This does not set the
-// interface to "up". If the MAC is not settable or 'mac' is NULL then this will
-// use the system MAC address and 'mac' will be ignored. This also fills in the
-// driver capabilities struct.
+// Initializes the interface and returns whether successful. This does not set
+// the interface to "up". If the MAC is not settable or 'mac' is NULL then this
+// will use the system MAC address and 'mac' will be ignored. This also fills in
+// the driver capabilities struct.
 //
 // If this returns false then errno will be set to something appropriate.
 //
 // This may be called more than once, but if the MAC address has changed then
 // the interface is first removed and then re-added.
 //
+// The netif becomes the default netif only if there isn't one already.
+//
 // It is suggested to initialize the entropy generator with
 // qnethernet_hal_init_entropy() before calling this.
 //
-// See also: driver::get_capabilities(dc)
+// See also: DriverOps::get_capabilities
 ATTRIBUTE_NODISCARD
-bool init(const uint8_t mac[ETH_HWADDR_LEN],
+bool init(Interface* iface,
+          const uint8_t mac[ETH_HWADDR_LEN],
           netif_ext_callback_fn callback,
           DriverCapabilities* dc);
 
-// Shuts down the Ethernet stack and driver.
-void deinit();
+// Removes the interface and shuts down its driver.
+void deinit(Interface* iface);
 
 // Gets a pointer to the netif structure. This is useful for the netif callback
 // before the default netif has been assigned.
 ATTRIBUTE_NODISCARD
-struct netif* netif();
+struct netif* netif(Interface* iface);
 
-// Processes any Ethernet input. This is meant to be called often by the
-// main loop.
-void proc_input();
+// Processes any input. This is meant to be called often by the main loop.
+void proc_input(Interface* iface);
 
-// Polls the stack (if needed) and Ethernet link status.
-void poll();
+// Polls the driver, for example, the link status.
+void poll(Interface* iface);
+
+// Checks the stack's timeouts. This is shared by all interfaces.
+void check_timeouts();
 
 #if QNETHERNET_ENABLE_RAW_FRAME_SUPPORT
 // Outputs a raw ethernet frame. This returns false if frame is NULL or if the
@@ -334,30 +419,41 @@ void poll();
 // for non-VLAN frames and [18, MAX_FRAME_LEN] for VLAN frames. Note that these
 // ranges exclude the 4-byte FCS (frame check sequence).
 //
-// This returns the result of driver::output_frame(), if the frame checks pass.
+// This returns the result of the driver's output_frame(), if the frame checks
+// pass, or false if the driver doesn't support it.
 ATTRIBUTE_NODISCARD
-bool output_frame(const void* frame, size_t len);
+bool output_frame(Interface* iface, const void* frame, size_t len);
 #endif  // QNETHERNET_ENABLE_RAW_FRAME_SUPPORT
 
 // --------------------------------------------------------------------------
 //  MAC Address Filtering
 // --------------------------------------------------------------------------
 
-#if !QNETHERNET_ENABLE_PROMISCUOUS_MODE && LWIP_IPV4
+#if !QNETHERNET_ENABLE_PROMISCUOUS_MODE
+
+// Calls the driver's set_incoming_mac_address_allowed(), returning false if
+// the driver doesn't support it.
+ATTRIBUTE_NODISCARD
+bool set_incoming_mac_address_allowed(Interface* iface,
+                                      const uint8_t mac[ETH_HWADDR_LEN],
+                                      bool allow);
+
+#if LWIP_IPV4
 
 // For joining and leaving multicast groups; these call
-// driver::set_incoming_mac_address_allowed() with the MAC addresses related to
-// the given multicast group. Note that this affects low-level MAC filtering and
-// not the IP stack's use of multicast groups.
+// set_incoming_mac_address_allowed() with the MAC addresses related to the
+// given multicast group. Note that this affects low-level MAC filtering and not
+// the IP stack's use of multicast groups.
 //
 // If 'group' is NULL then these return false. Otherwise, these return the
-// result of 'set_mac_address_allowed()'.
+// result of 'set_incoming_mac_address_allowed()'.
 ATTRIBUTE_NODISCARD
-bool join_group(const ip4_addr_t* group);
+bool join_group(Interface* iface, const ip4_addr_t* group);
 ATTRIBUTE_NODISCARD
-bool leave_group(const ip4_addr_t* group);
+bool leave_group(Interface* iface, const ip4_addr_t* group);
 
-#endif  // !QNETHERNET_ENABLE_PROMISCUOUS_MODE && LWIP_IPV4
+#endif  // LWIP_IPV4
+#endif  // !QNETHERNET_ENABLE_PROMISCUOUS_MODE
 
 }  // namespace enet
 
