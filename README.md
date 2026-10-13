@@ -54,12 +54,14 @@ Joining happens in the background and is retried if it fails or the link is lost
 - `scanNetworks()`, then `scanResult(i, result)` or `SSID(i)`, `RSSI(i)`, `channel(i)`, `BSSID(i, mac)`, `encryptionType(i)`
 - `disconnect()` (same as `end()`)
 
+Sockets: `WiFiClient`, `WiFiServer`, and `WiFiUDP` are aliases for `EthernetClient`, `EthernetServer`, and `EthernetUDP`. Sockets aren't tied to an interface: outgoing traffic leaves through the interface whose subnet holds the destination (otherwise the default interface), and servers and UDP listeners accept on all started interfaces. UDP multicast joins the group on all started interfaces.
+
 Notes:
 - Both interfaces share the stack: DNS servers are shared, and calling `Ethernet.loop()` (done automatically from `yield()`) runs both.
 - The default route is `Ethernet` whenever it's started; use `setAsDefaultInterface()` to change it.
 - `scanNetworks()` blocks; a few frames received over WiFi during the scan are queued and the rest are dropped.
 
-See the "EthernetAndWiFi" and "cyw43_scan" examples.
+See the "EthernetAndWiFi", "WiFiUDPEcho", and "cyw43_scan" examples.
 
 There is one more define that switches between using the CYW4343W or the CYW43439 boards. Most likley you will be using the CYW43439 device.
 The following define is located in "QNEthernet_WIFI_0.37.0/src/qnethernet/drivers/cyw4343w/src/misc_defs.h" and chooses which WIFI device you are using, CYW43439 or CYW4343W device.

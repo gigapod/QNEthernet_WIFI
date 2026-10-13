@@ -180,6 +180,14 @@ class WiFiClass final : private EthernetClass {
 // Instance for interacting with WiFi.
 STATIC_INIT_DECL(WiFiClass, WiFi);
 
+// Socket types. Sockets aren't tied to an interface: the stack sends out the
+// interface whose subnet holds the destination (or the default interface),
+// and listening sockets accept on all started interfaces. These names are for
+// familiarity with other WiFi libraries.
+using WiFiClient = EthernetClient;
+using WiFiServer = EthernetServer;
+using WiFiUDP    = EthernetUDP;
+
 }  // namespace network
 }  // namespace qindesign
 
