@@ -23,19 +23,32 @@
 
 #include "cyw4343w/src/cyw43_T4_SDIO.h"
 #include "cyw4343w/src/join.h"
-#include "../src/secrets.h"
+#include "cyw4343w/src/scan.h"
+#include "qnethernet/drivers/driver_CYW4343W_wifi.h"
+
+// Chip state shared with the cyw4343w sources
+extern W4343WCard WIFIcard;
+extern Join join;
+extern Event evt;
+extern EVENT_INFO event_info;
+extern EVT_STR join_evts[];
+extern Scan scn;
 
 namespace qindesign {
 namespace network {
 namespace driver_cyw4343w {
 
-Join qnjoin;
-W4343WCard WIFIcard;
-Event evt;
-
-static int s_checkLinkStatusState = 0;
-uint32_t poll_ticks;
+static uint32_t poll_ticks;
 static struct LinkInfo s_linkInfo;
+
+// Network to join
+static char s_ssid[kMaxSSIDLen + 1]{'\0'};
+static char s_passphrase[kMaxPassphraseLen + 1]{'\0'};
+static Security s_security = Security::kWPA2;
+static bool s_credentialsChanged = false;
+
+// Whether the join state machine is running
+static bool s_joinEnabled = false;
 
 FLASHMEM void get_capabilities(DriverCapabilities* const dc) {
   dc->isMACSettable                = false;
@@ -61,32 +74,7 @@ typedef enum {
 static enet_init_states_t s_initState = kInitStateStart;
 
 //==============================================================================
-// Get System MAC address.
-//==============================================================================
-void get_system_mac(uint8_t mac[ETH_HWADDR_LEN]) {
-  WIFIcard.getMACAddress((uint8_t *)mac);
-}
-
-//==============================================================================
-// Get current MAC address.
-//==============================================================================
-bool get_mac(uint8_t mac[ETH_HWADDR_LEN]) {
-  if(qnjoin.join_check() != JOIN_OK) return false;
-  WIFIcard.getMACAddress((uint8_t *)mac);
-  return true;
-}
-
-//==============================================================================
-// Set MAC address (Not resetable).
-//==============================================================================
-bool set_mac(const uint8_t mac[ETH_HWADDR_LEN]) {
-//  if(qnjoin.join_check() != JOIN_OK) return false;
-//  WIFIcard.getMACAddress((uint8_t *)mac);
-  return true;
-}
-
-//==============================================================================
-// Has Hardware.
+// Has Hardware. This boots the chip the first time.
 //==============================================================================
 bool has_hardware() {
   switch (s_initState) {
@@ -101,36 +89,90 @@ bool has_hardware() {
     default:
       break;
   }
-  // Init CYW4343W WIFI hardware and join network.
-  WIFIinit(MY_SSID, MY_PASSPHRASE, SECURITY);
+  s_initState = WIFIboot() ? kInitStateHasHardware : kInitStateNoHardware;
+  return (s_initState != kInitStateNoHardware);
+}
+
+//==============================================================================
+// Get System MAC address.
+//==============================================================================
+void get_system_mac(uint8_t mac[ETH_HWADDR_LEN]) {
+  if (!has_hardware()) {
+    std::memset(mac, 0, ETH_HWADDR_LEN);
+    return;
+  }
+  WIFIcard.getMACAddress(mac);
+}
+
+//==============================================================================
+// Get current MAC address.
+//==============================================================================
+bool get_mac(uint8_t mac[ETH_HWADDR_LEN]) {
+  if (!has_hardware()) {
+    return false;
+  }
+  WIFIcard.getMACAddress(mac);
   return true;
 }
 
+//==============================================================================
+// Set MAC address (Not settable).
+//==============================================================================
+bool set_mac(const uint8_t mac[ETH_HWADDR_LEN]) {
+  (void)mac;
+  return true;
+}
 
 //==============================================================================
 // UNUSED.
 //==============================================================================
 void set_chip_select_pin(int pin) {
-	(void)pin;
+  (void)pin;
+}
+
+// Starts joining the configured network, if there is one.
+static void start_join() {
+  s_credentialsChanged = false;
+  if (s_ssid[0] == '\0') {
+    s_joinEnabled = false;
+    return;
+  }
+  event_info.join = JOIN_IDLE;
+  event_info.link = 0;
+  if (!join.join_start(s_ssid, s_passphrase, static_cast<int>(s_security))) {
+    // Let the join state machine retry
+    event_info.join = JOIN_FAIL;
+  }
+  s_joinEnabled = true;
 }
 
 //==============================================================================
-// Previously initialized. Marked initialized here.
+// Initialize: boot the chip if needed and start joining the network.
 //==============================================================================
 bool init(void) {
-  if (s_initState == kInitStateInitialized) {
-    return true;
-  } else {
-    s_initState = kInitStateInitialized;
-    return true;
+  if (!has_hardware()) {
+    return false;
   }
+  s_initState = kInitStateInitialized;
+  if (!s_joinEnabled || s_credentialsChanged) {
+    start_join();
+  }
+  return true;
 }
 
 //==============================================================================
 // Leave network.
 //==============================================================================
 void deinit() {
-  qnjoin.join_stop();
+  if (s_joinEnabled) {
+    join.join_stop();
+    s_joinEnabled = false;
+  }
+  event_info.join = JOIN_IDLE;
+  event_info.link = 0;
+  if (s_initState == kInitStateInitialized) {
+    s_initState = kInitStateHasHardware;
+  }
 }
 
 //==============================================================================
@@ -166,24 +208,25 @@ struct pbuf* proc_input(struct netif *netif, int counter) {
 // Poll network.
 //==============================================================================
 void poll(struct netif *netif) {
+  if (s_initState != kInitStateInitialized) {
+    return;
+  }
   // Get any events, poll the joining state machine.
   if(WIFIcard.ustimeout(&poll_ticks, EVENT_POLL_USEC)) {
     evt.pollEvents(); // Check for an event frame.
     // Poll join status. Try to re-join if link is lost.
-    qnjoin.join_state_poll(MY_SSID, MY_PASSPHRASE, SECURITY);
+    if (s_joinEnabled) {
+      join.join_state_poll(s_ssid, s_passphrase, static_cast<int>(s_security));
+    }
     WIFIcard.ustimeout(&poll_ticks, 0); // Clear Polling timout counter.
   }
   // Check if link is up.
-  uint8_t link_state = qnjoin.join_check() ? LINK_UP : LINK_DOWN;
-  if (netif_is_link_up(netif) != link_state) {
-    if (link_state) {
-      printf("Setting link up\n");
+  const bool linkUp = s_joinEnabled && (join.join_check() == JOIN_OK);
+  if (static_cast<bool>(netif_is_link_up(netif)) != linkUp) {
+    if (linkUp) {
       netif_set_link_up(netif);
-      s_checkLinkStatusState = link_state; //
     } else {
-      printf("Setting link down\n");
       netif_set_link_down(netif);
-      s_checkLinkStatusState = link_state;
     }
   }
 }
@@ -255,6 +298,131 @@ bool set_incoming_mac_address_allowed(const uint8_t mac[ETH_HWADDR_LEN],bool all
 //==============================================================================
 bool is_unknown() {
   return s_initState == kInitStateStart;;
+}
+
+// --------------------------------------------------------------------------
+//  WiFi Functions
+// --------------------------------------------------------------------------
+
+bool set_credentials(const char* const ssid, const char* const passphrase,
+                     const Security security) {
+  if (ssid == nullptr) {
+    return false;
+  }
+  const size_t ssidLen = std::strlen(ssid);
+  if ((ssidLen == 0) || (ssidLen > kMaxSSIDLen)) {
+    return false;
+  }
+  const char* const pass =
+      ((security == Security::kOpen) || (passphrase == nullptr)) ? ""
+                                                                 : passphrase;
+  const size_t passLen = std::strlen(pass);
+  if ((security != Security::kOpen) &&
+      ((passLen < kMinPassphraseLen) || (passLen > kMaxPassphraseLen))) {
+    return false;
+  }
+
+  if ((std::strcmp(s_ssid, ssid) != 0) ||
+      (std::strcmp(s_passphrase, pass) != 0) || (s_security != security)) {
+    std::memcpy(s_ssid, ssid, ssidLen + 1);
+    std::memcpy(s_passphrase, pass, passLen + 1);
+    s_security = security;
+    s_credentialsChanged = true;
+  }
+  return true;
+}
+
+const char* ssid() {
+  return s_ssid;
+}
+
+JoinStatus join_status() {
+  if (!s_joinEnabled) {
+    return JoinStatus::kStopped;
+  }
+  switch (event_info.join) {
+    case JOIN_OK:
+      return JoinStatus::kJoined;
+    case JOIN_FAIL:
+      return JoinStatus::kFailed;
+    default:
+      return JoinStatus::kJoining;
+  }
+}
+
+bool rssi(int32_t* const value) {
+  if (join_status() != JoinStatus::kJoined) {
+    return false;
+  }
+  int32_t v = 0;
+  if (WIFIcard.ioctl_rd_data(WLC_GET_RSSI, IOCTL_WAIT, &v, sizeof(v)) <= 0) {
+    return false;
+  }
+  *value = v;
+  return true;
+}
+
+bool bssid(uint8_t mac[6]) {
+  if (join_status() != JoinStatus::kJoined) {
+    return false;
+  }
+  return (WIFIcard.ioctl_rd_data(WLC_GET_BSSID, IOCTL_WAIT, mac, 6) > 0);
+}
+
+// Number of results from the last scan.
+static int s_scanCount = 0;
+
+int scan(const uint32_t timeout) {
+  s_scanCount = 0;
+  if (!has_hardware()) {
+    return -1;
+  }
+
+  static bool handlerAdded = false;
+  if (!handlerAdded) {
+    if (!evt.add_event_handler(&Scan::scan_event_handler)) {
+      return -1;
+    }
+    handlerAdded = true;
+  }
+
+  // Note: This replaces the enabled events with the scan events
+  const bool started = scn.scan_start();
+  if (started) {
+    // Don't call yield() here because the stack's input processing would
+    // consume the scan events
+    const uint32_t start = millis();
+    while ((millis() - start) < timeout) {
+      if (evt.pollEvents() < 0) {  // Scan complete
+        break;
+      }
+      delayMicroseconds(1000);
+    }
+    s_scanCount = scn.getScanCount();
+  }
+
+  // Restore the join events
+  if (s_joinEnabled) {
+    (void)evt.ioctl_enable_evts(join_evts);
+  }
+
+  return started ? s_scanCount : -1;
+}
+
+bool scan_result(const int index, ScanResult* const result) {
+  if ((index < 0) || (index >= s_scanCount) || (result == nullptr)) {
+    return false;
+  }
+  const simple_scan_result_t& r = scn.getFilteredScanResults()[index];
+  const size_t ssidLen = strnlen(reinterpret_cast<const char*>(r.ssid),
+                                 sizeof(r.ssid));
+  std::memcpy(result->ssid, r.ssid, ssidLen);
+  result->ssid[ssidLen] = '\0';
+  std::memcpy(result->bssid, r.bssid, sizeof(result->bssid));
+  result->rssi     = r.signal_strength;
+  result->channel  = r.channel;
+  result->security = r.security_mask;
+  return true;
 }
 
 // --------------------------------------------------------------------------

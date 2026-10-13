@@ -5,8 +5,8 @@
 // time and pings each one's gateway.
 //
 // This needs a Teensy 4.1 with the CYW4343W WiFi shield, and the
-// `ARDUINO_TEENSY41_CYW4343W` macro defined to `1`. The WiFi network is
-// currently configured at compile time (see the driver's secrets.h).
+// `ARDUINO_TEENSY41_CYW4343W` macro defined to `1`. Set your network's SSID
+// and passphrase below.
 //
 // This file is part of the QNEthernet library.
 
@@ -21,6 +21,9 @@ using namespace qindesign::network;
 // --------------------------------------------------------------------------
 //  Configuration
 // --------------------------------------------------------------------------
+
+constexpr char kSSID[]{"yourSSID"};
+constexpr char kPassphrase[]{"yourPassphrase"};  // Empty for an open network
 
 constexpr uint32_t kDHCPTimeout = 15000;  // 15 seconds
 
@@ -79,8 +82,8 @@ void setup() {
   if (!Ethernet.begin()) {
     printf("Failed to start Ethernet\r\n");
   }
-  printf("Starting WiFi with DHCP...\r\n");
-  if (!WiFi.begin()) {
+  printf("Starting WiFi with DHCP, joining \"%s\"...\r\n", kSSID);
+  if (!WiFi.begin(kSSID, kPassphrase)) {
     printf("Failed to start WiFi\r\n");
   }
 
@@ -89,7 +92,14 @@ void setup() {
     printf("No Ethernet address yet\r\n");
   }
   if (!WiFi.waitForLocalIP(kDHCPTimeout)) {
-    printf("No WiFi address yet\r\n");
+    printf("No WiFi address yet (status=%u)\r\n", WiFi.status());
+  } else {
+    uint8_t bssid[6];
+    if (WiFi.BSSID(bssid) != nullptr) {
+      printf("[WiFi] SSID=%s BSSID=%02X:%02X:%02X:%02X:%02X:%02X RSSI=%ld dBm\r\n",
+             WiFi.SSID(), bssid[0], bssid[1], bssid[2], bssid[3], bssid[4],
+             bssid[5], static_cast<long>(WiFi.RSSI()));
+    }
   }
 }
 

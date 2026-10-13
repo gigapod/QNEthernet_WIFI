@@ -3,7 +3,6 @@
 ## This version of the library adds support for the Sparckfun CYW43439 WIFI sheild:
 - Added support for the CYW43439 WIFI chip (see below). 
 - Added a print debug switch to enable or disable printing debug information during initialization. Will be expanded later.
-- Added guards against trying to use the default SSID and password in "QNEthernet_WiFI/src/secrets.h". Will throw a descriptive error.
 - Removed more unused code.
 - Fixed "cyw43_scan.ino". Is now stable and repeatable.
 - Reworked WIFI initialization and join API.
@@ -32,35 +31,36 @@ TEENSY 4.1   CYW43439 WIFI Board
 - 29 ---------------> INT   <-------- Different from above pinout.
 - 30 ---------------> WL_ON <---- Different from above pinout.
 
-### To use the examples with the wifi card you must first edit the "QNEthernet_WIFI_0.37.0/src/secrets.h" file:
+### Using wired Ethernet and WiFi together
+
+With `ARDUINO_TEENSY41_CYW4343W` set to `1` (in "src/qnethernet_opts.h" or the build flags), both interfaces are compiled in and can run at the same time:
+- `Ethernet` is the Teensy 4.1's wired Ethernet.
+- `WiFi` is the CYW4343W/CYW43439 WiFi interface. It has the same API as `Ethernet` (begin, localIP, waitForLocalIP, callbacks, etc.), minus the wired-only parts, plus WiFi functions.
+
+With it set to `0`, only `Ethernet` is compiled in.
+
+The network to join is chosen at runtime; there is no secrets file:
 ```
-// The secrets file
+WiFi.begin("yourSSID", "yourPassphrase");  // WPA2 with DHCP; empty passphrase for an open network
+WiFi.waitForLocalIP(15000);
 
-// SSID
-#define MY_SSID            "yourSSID"
-
-//PASSPHRASE
-#define MY_PASSPHRASE      "yourPWD"
-
-// Security settings: 0 for none, 1 for WPA_TKIP, 2 for WPA2
-// The hard-coded SSID and password is for test purposes only!!!
-#define SECURITY        2
+// Or with a static address:
+WiFi.setCredentials("yourSSID", "yourPassphrase", WiFiClass::Security::kWPA2);
+WiFi.begin(ip, subnet, gateway);
 ```
+Joining happens in the background and is retried if it fails or the link is lost. Other WiFi functions:
+- `status()`: `WL_CONNECTED`, `WL_IDLE_STATUS` (joining), `WL_CONNECT_FAILED`, `WL_DISCONNECTED`, or `WL_NO_SHIELD`
+- `SSID()`, `RSSI()`, `BSSID(mac)`
+- `scanNetworks()`, then `scanResult(i, result)` or `SSID(i)`, `RSSI(i)`, `channel(i)`, `BSSID(i, mac)`, `encryptionType(i)`
+- `disconnect()` (same as `end()`)
 
-Set MY_SSID to your network wifi name and set MY_PASSPHRASE to your chosen password. Set SECURITY to one of the three types.
+Notes:
+- Both interfaces share the stack: DNS servers are shared, and calling `Ethernet.loop()` (done automatically from `yield()`) runs both.
+- The default route is `Ethernet` whenever it's started; use `setAsDefaultInterface()` to change it.
+- `scanNetworks()` blocks and the WiFi interface drops received frames while scanning.
 
-Most all of the examples seem to work. Some have not been tested. 
+See the "EthernetAndWiFi" and "cyw43_scan" examples.
 
-### This branch of the QNEthernet (QNEthernet_WIFI_0.37.0) library will allow you to use both wired and wifi ethernet on the Teensy4.1. It also allows you to switch between using the CYW4343W device and CYW43439 device.
-
-The following define is located in "QNEthernet_WIFI_0.37.0/src/QNEthernet_opts.h" and switches betweeen WIRED and WIFI Ethernet:
-```
-// 1 == Disable T41 native ethernet IF and enable T41 CYW4343W IF (Default).
-// 0 == Enable T41 native ethernet IF and disable T41 CYW4343W IF.
-#ifndef ARDUINO_TEENSY41_CYW4343W
-#define ARDUINO_TEENSY41_CYW4343W 1
-#endif
-```
 There is one more define that switches between using the CYW4343W or the CYW43439 boards. Most likley you will be using the CYW43439 device.
 The following define is located in "QNEthernet_WIFI_0.37.0/src/qnethernet/drivers/cyw4343w/src/misc_defs.h" and chooses which WIFI device you are using, CYW43439 or CYW4343W device.
 ```

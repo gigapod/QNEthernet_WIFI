@@ -12,25 +12,13 @@ EVT_STR no_evts[] = NO_EVTS;
 EVT_STR join_evts[] = JOIN_EVTS;
 
 // =====================================================================
-// Join Start (params stored in secrets.h)
+// Join Start
 // =====================================================================
 bool Join::join_start(const char *ssID, const char *passphrase, int security) {
 #if INIT_DEBUG_MODE == true
   printf(SER_YELLOW "In joinNetworks\n" SER_RESET);
 #endif
   join_stop(); // Make sure we are shut down before starting.
-  // Make sure we have changed the default SSID to your SSID in "QNEthernet_WIFI/src/secrets.h".
-  if(!strcmp(ssID,(const char *)"yourSSID")) {
-    printf("Error: The default SSID is being used.\n");
-    printf("In 'QNEthernet_WIFI/src/secrets.h' change 'yourSSID' to your WIFI router's SSID.\n");
-    return false;
-  }
-  // Make sure we have changed the default password to your password in "QNEthernet_WIFI/src/secrets.h".
-  if(!strcmp(passphrase,(const char *)"yourPWD")) {
-    printf("Error: The default password is being used.\n");
-    printf("In 'QNEthernet_WIFI/src/secrets.h' change 'yourPWD' to your WIFI router's password.\n");
-    return false;
-  }
   // Process SSID
   wlc_ssid_t ssid;
   ssid.SSID_len = strlen(ssID);
@@ -166,7 +154,7 @@ bool Join::join_restart(const char *ssid, const char *passwd, int security) {
 // =====================================================================
 int Join::join_event_handler(EVENT_INFO *eip) {
   int ret = 1;
-  uint16_t news; // Event type bit flag.
+  uint16_t news = eip->link; // Event type bit flag.
   if(eip->chan == SDPCM_CHAN_EVT) {
     news = eip->link;
     if(eip->event_type==WLC_E_LINK && eip->status==0) {

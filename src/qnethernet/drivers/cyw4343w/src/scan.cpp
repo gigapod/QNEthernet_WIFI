@@ -61,8 +61,11 @@ int Scan::scan_event_handler(EVENT_INFO *eip) {
         printf("Scan Failed\n");
         return erp->eventh.status; // Return invalid status.
       }
-      scan_count++; // Start scan count at 1. 
-      parseScanResult(erp); // Parse Information Element RSN entries.
+      // Entry 0 is unused, so there's room for MAX_SCAN_ENTRIES - 1
+      if(scan_count < MAX_SCAN_ENTRIES - 1) {
+        scan_count++; // Start scan count at 1. 
+        parseScanResult(erp); // Parse Information Element RSN entries.
+      }
 #if SHOW_HIDDEN == false
 	  }
 #endif
@@ -119,8 +122,7 @@ int Scan::compareBSSID(const void *a, const void *b) {
 // Remove duplicate scan entries and return new scan entry count.
 // =====================================================================
 int Scan::removeDuplicates(void) {
-  // Need at least two entries to do compare.
-  if(scan_count < 2) return 0;
+  if(scan_count == 0) return 0;
     // Get pointer to scan results array.
     simple_scan_result_t *scnrslt = scn.getScanResults();    
   // Valid filtered_scan_results[] entry counter index.
@@ -131,7 +133,7 @@ int Scan::removeDuplicates(void) {
   qsort(scnrslt+1, scan_count, sizeof(simple_scan_result_t), scn.compareBSSID);
   // Remove duplicate entries.
   for(int i=1; i <= scan_count; i++) {
-    if(MAC_CMP(scnrslt[i].bssid, scnrslt[i+1].bssid)) {
+    if(i < scan_count && MAC_CMP(scnrslt[i].bssid, scnrslt[i+1].bssid)) {
       continue;
 	} else {
       filtered_scan_results[index++] = scnrslt[i];   
@@ -146,8 +148,6 @@ int Scan::removeDuplicates(void) {
 uint32_t Scan::parseScanResult(ESCAN_RESULT *evsrp) {
   uint32_t security_mask = SEC_OPEN;
 
-  if((evsrp->info.SSID_len == 0) || (strlen((char *)evsrp->info.SSID) == 0))
-    strcpy((char *)evsrp->info.SSID, "[HIDDEN]\0");
   // Start of the Information Elements loop
   const uint8_t *ie_start = (uint8_t *)&evsrp->info + evsrp->info.ie_offset;
   // Total length from start of ie_offset address.
@@ -203,7 +203,7 @@ uint32_t Scan::parseScanResult(ESCAN_RESULT *evsrp) {
   }
   // Convert the security type of the scan result to the corresponding
   // security string (See Above defs).
-  const char* security_type_string;
+  const char* security_type_string = "UNKNOWN";
   switch (security_mask) {
     case SEC_OPEN:
       security_type_string = "OPEN"; //SECURITY_OPEN;
@@ -226,7 +226,16 @@ uint32_t Scan::parseScanResult(ESCAN_RESULT *evsrp) {
   }
   // Fill in scan results array entry with the current scan entry index (scan_count).
   MAC_CPY(scan_results[scan_count].bssid, evsrp->info.BSSID.octet);
-  strcpy((char *)scan_results[scan_count].ssid, (const char *)evsrp->info.SSID); 
+  // The SSID isn't necessarily NUL-terminated
+  memset(scan_results[scan_count].ssid, 0, sizeof(scan_results[scan_count].ssid));
+  if(evsrp->info.SSID_len == 0) {
+    strcpy((char *)scan_results[scan_count].ssid, "[HIDDEN]");
+  } else {
+    memcpy(scan_results[scan_count].ssid, evsrp->info.SSID,
+           evsrp->info.SSID_len > sizeof(scan_results[scan_count].ssid)
+               ? sizeof(scan_results[scan_count].ssid)
+               : evsrp->info.SSID_len);
+  }
   scan_results[scan_count].signal_strength = evsrp->info.RSSI;
   strcpy((char *)scan_results[scan_count].security, (const char *)security_type_string);
   scan_results[scan_count].channel = evsrp->info.chanspec&0xff;
