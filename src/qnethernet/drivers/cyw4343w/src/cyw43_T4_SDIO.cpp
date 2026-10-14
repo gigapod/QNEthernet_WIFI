@@ -309,7 +309,7 @@ void W4343WCard::setBlockCountSize(bool blockMode, uint32_t functionNumber, uint
   // Set up block count and block size
   if (blockMode == true) {
     switch (functionNumber) {
-/* 0 */ case SD_FUNC_BUS: m_psdhc->BLK_ATT = SDHC_BLKATTR_BLKCNT(size) | SDHC_BLKATTR_BLKSIZE(64); 
+/* 0 */ case SD_FUNC_BUS: m_psdhc->BLK_ATT = SDHC_BLKATTR_BLKCNT(size) | SDHC_BLKATTR_BLKSIZE(SD_BUS_BLK_BYTES); 
                         break;
 /* 1 */ case SD_FUNC_BAK: m_psdhc->BLK_ATT = SDHC_BLKATTR_BLKCNT(size) | SDHC_BLKATTR_BLKSIZE(SD_BAK_BLK_BYTES);
                         break;
@@ -347,16 +347,61 @@ bool W4343WCard::cardCMD53_write(uint32_t functionNumber, uint32_t registerAddre
 //==============================================================================
 
 //==============================================================================
-// CMD53 Read/Write
+// Block size for a function's block mode transfers, as set in begin().
+//==============================================================================
+static uint32_t functionBlockSize(uint32_t functionNumber) {
+  switch (functionNumber) {
+    case SD_FUNC_BUS: return SD_BUS_BLK_BYTES;
+    case SD_FUNC_BAK: return SD_BAK_BLK_BYTES;
+    case SD_FUNC_RAD: return SD_RAD_BLK_BYTES;
+    default:          return 0;
+  }
+}
+//==============================================================================
+
+//==============================================================================
+// CMD53 Read/Write. Transfers larger than the function's block size are sent
+// as whole blocks in block mode, followed by any remainder in byte mode. Byte
+// mode alone can't move more than 512 bytes in one command.
 //==============================================================================
 bool W4343WCard::cardCMD53(uint32_t functionNumber, uint32_t registerAddress, uint8_t * buffer, uint32_t size, bool write, bool logOutput) {
-  bool return_value = false;
-  bool blockMode = false;
-  
   if(buffer == nullptr) {
 	if (logOutput) printf(" buffer == nullptr\n");
 	return false;
   }
+  const uint32_t blkSize = functionBlockSize(functionNumber);
+  if ((blkSize == 0) || (size <= blkSize)) {
+    return cardCMD53_xfer(functionNumber, registerAddress, buffer, size, false, write, logOutput);
+  }
+
+  // The backplane (F1) is addressed memory, so the address advances; the radio
+  // (F2) is a FIFO, so it doesn't
+  const bool advance = (functionNumber != SD_FUNC_RAD);
+  uint32_t done = 0;
+  while (size - done >= blkSize) {
+    // The block count is 9 bits, and 0 would mean an open-ended transfer
+    const uint32_t blocks = MIN((size - done) / blkSize, CMD53_MAX_BLOCKS);
+    if (!cardCMD53_xfer(functionNumber, registerAddress + (advance ? done : 0),
+                        buffer + done, blocks, true, write, logOutput)) {
+      return false;
+    }
+    done += blocks * blkSize;
+  }
+  if (done < size) {
+    return cardCMD53_xfer(functionNumber, registerAddress + (advance ? done : 0),
+                          buffer + done, size - done, false, write, logOutput);
+  }
+  return true;
+}
+//==============================================================================
+
+//==============================================================================
+// One CMD53 transfer. In block mode, count is the number of blocks of the
+// function's block size; in byte mode, it's the number of bytes (1-512).
+//==============================================================================
+bool W4343WCard::cardCMD53_xfer(uint32_t functionNumber, uint32_t registerAddress, uint8_t * buffer, uint32_t count, bool blockMode, bool write, bool logOutput) {
+  bool return_value = false;
+  const uint32_t size = blockMode ? count * functionBlockSize(functionNumber) : count;
   uint8_t opCode = 1;
   // CMD53 argument format:
   // [31]    - Read/Write flag 
@@ -366,14 +411,17 @@ bool W4343WCard::cardCMD53(uint32_t functionNumber, uint32_t registerAddress, ui
   // [25:9]  - Address (17-bit address)
   // [8:0]   - Byte count (for byte mode) or block count (for block mode)
   uint32_t arg = (write << 31) | (functionNumber << 28) | (blockMode << 27) | 
-                 (opCode << 26) | ((registerAddress & 0x1FFFF) << 9) | (size & 0x1FF);
+                 (opCode << 26) | ((registerAddress & 0x1FFFF) << 9) | (count & 0x1FF);
   // Set up the basic transfer type for CMD53
   uint32_t xfertyp = SDHC_XFERTYP_CMDINX(53) | SDHC_XFERTYP_DPSEL | SDHC_XFERTYP_BCEN | CMD_RESP_R5; 
   // Add read direction
   if(write == false) {
     xfertyp |=  SDHC_MIX_CTRL_DTDSEL;
   }
-  setBlockCountSize(blockMode, functionNumber, size);
+  if(blockMode && (count > 1)) {
+    xfertyp |= SDHC_MIX_CTRL_MSBSEL;
+  }
+  setBlockCountSize(blockMode, functionNumber, count);
   // Debug info
   // char cmdInfo[90];
   // sprintf(cmdInfo, "CMD: %ld %s  REG: 0x%08lX ARG: 0x%08lX", (xfertyp >> 24) & 0x3F, write ? "WRTE" : "READ", registerAddress, arg);
@@ -403,8 +451,11 @@ bool W4343WCard::cardCMD53(uint32_t functionNumber, uint32_t registerAddress, ui
       m_psdhc->PROT_CTRL &= ~SDHC_PROCTL_SABGREQ;
       m_psdhc->PROT_CTRL |= SDHC_PROCTL_CREQ;
     }
-    //Set Stop At Block Gap Request
-    m_psdhc->PROT_CTRL |= SDHC_PROCTL_SABGREQ;
+    //Set Stop At Block Gap Request, except for multi-block writes, which it
+    //would pause after the first block
+    if(!(blockMode && (count > 1))) {
+      m_psdhc->PROT_CTRL |= SDHC_PROCTL_SABGREQ;
+    }
     uint32_t index = 0;
     while(index < wordCount) {
       // Wait for the buffer write enable flag

@@ -85,6 +85,7 @@ class W4343WCard {
   bool cardCMD53_read(uint32_t functionNumber, uint32_t registerAddress, uint8_t * buffer, uint32_t size, bool logOutput = false);
   bool cardCMD53_write(uint32_t functionNumber, uint32_t registerAddress, uint8_t * buffer, uint32_t size, bool logOutput = false);
   bool cardCMD53(uint32_t functionNumber, uint32_t registerAddress, uint8_t * buffer, uint32_t size, bool write, bool logOutput);
+  bool cardCMD53_xfer(uint32_t functionNumber, uint32_t registerAddress, uint8_t * buffer, uint32_t count, bool blockMode, bool write, bool logOutput);
 
   int ioctl_get_uint32(const char * name, int wait_msec,  uint8_t *data);
   int ioctl_set_uint32(const char *name, int wait_msec, uint32_t val);

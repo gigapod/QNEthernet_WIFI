@@ -30,6 +30,7 @@
 #define SD_BUS_BLK_BYTES    32
 #define SD_BAK_BLK_BYTES    64
 #define SD_RAD_BLK_BYTES    512
+#define CMD53_MAX_BLOCKS    511  // CMD53 block count is 9 bits; 0 means open-ended
 
 //Read/write flags
 #define SD_RD           0
