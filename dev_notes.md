@@ -277,3 +277,27 @@ byte-mode writes, as before.
 **Still open:** the `BREN`/`BWEN` spin loops in `cardCMD53_xfer()` have no
 timeout, so any transfer that stops early hangs instead of failing. Bounding
 them also needs a data-line reset on failure to leave the controller usable.
+
+### Follow-up: receive back in byte mode (slower throughput)
+
+After the stop-at-block-gap fix, `WiFiTCPThroughput` worked but was much
+slower than on `main`.
+
+**Change:** received frames are read in byte-mode chunks of up to 512 bytes
+again, as on `main`. Block mode stays on for transfers sent over 512 bytes,
+which is where it's needed. Reading a whole frame in one block-mode call is
+kept behind a switch in `src/qnethernet/drivers/cyw4343w/src/event.h`:
+
+```c
+#define CYW43_RX_BLOCK_MODE 0   // 1 = read frames in block mode
+```
+
+**Suspected cause (unconfirmed):** block-mode F2 reads are paced on the chip
+side. The likeliest reason is that this driver never sets the chip's F2
+watermark, which the Linux brcmfmac driver sets for this chip.
+
+**Testing (pending, needs hardware):**
+
+- [ ] `WiFiTCPThroughput` with the default (`0`): speed should match `main`
+- [ ] `WiFiTCPThroughput` with `-DCYW43_RX_BLOCK_MODE=1`: should show the
+      slowdown again, confirming the cause

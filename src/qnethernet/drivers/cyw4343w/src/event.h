@@ -36,6 +36,12 @@
 #define TXDATA_LEN       2048 //1600
 #define RXDATA_LEN       2048 //1600
 
+// Whether received frames are read in block mode (1) or in byte-mode chunks of
+// up to 512 bytes (0). Block mode is needed for transmit, not receive.
+#ifndef CYW43_RX_BLOCK_MODE
+#define CYW43_RX_BLOCK_MODE 0
+#endif  // !CYW43_RX_BLOCK_MODE
+
 /* IP address is an array of bytes, to avoid misalignment problems */
 #define IPLEN    4
 typedef uint8_t  IPADDR[IPLEN];

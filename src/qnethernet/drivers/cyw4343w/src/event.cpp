@@ -234,9 +234,15 @@ uint32_t Event::ioctl_get_event(sdpcm_header_t *hp, uint8_t *data, int maxlen) {
   res = WIFIcard.cardCMD53_read(SD_FUNC_RAD, SB_32BIT_WIN, (uint8_t *)hp, sizeof(sdpcm_header_t), false);
   if(res == true && hp->len > sizeof(sdpcm_header_t) && hp->notlen > 0 && hp->len == (hp->notlen^0xffff)) {
     dlen = hp->len - sizeof(sdpcm_header_t);  //Strip off sdpcm_header_t.
-    // Read the frame in one call; cardCMD53_read() uses block mode for it
-    if (n < dlen && n < maxlen) {
+    // With CYW43_RX_BLOCK_MODE, read the frame in one call, which
+    // cardCMD53_read() sends in block mode; otherwise read it in byte-mode
+    // chunks of up to 512 bytes
+    while (n < dlen && n < maxlen) {
+#if CYW43_RX_BLOCK_MODE
       blklen = MIN(maxlen - n, dlen - n);
+#else
+      blklen = MIN(MIN(maxlen - n, dlen - n), IOCTL_MAX_BLKLEN_T4);
+#endif  // CYW43_RX_BLOCK_MODE
       WIFIcard.cardCMD53_read(SD_FUNC_RAD, SB_32BIT_WIN, (uint8_t *)(&data[n]), blklen, false);
       n += blklen;
     }
