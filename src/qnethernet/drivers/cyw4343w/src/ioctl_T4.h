@@ -38,6 +38,8 @@
 
 #define IOCTL_WAIT          30      // Time to wait for ioctl response (msec)
 #define IOCTL_WAIT_USEC     2000 //2000
+#define IOCTL_IRQ_WAIT_USEC 5000    // Max wait for the response IRQ before polling
+#define IOCTL_BUSY_MAX_USEC 100000  // Max wait for the bus to go idle
 #define MAX_CHUNK_LEN       400
 
 #define IOCTL_MAX_BLKLEN_T4 512  // cyw43_T4_SDIO needs this.
