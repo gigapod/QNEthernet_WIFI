@@ -279,7 +279,12 @@ void qnethernet_hal_check_core_locking(const char* file, int line,
 // #define LWIP_PBUF_CUSTOM_DATA_INIT(p)
 
 // Network Interfaces options
+#if defined(QNETHERNET_INTERNAL_MULTIPLE_DRIVERS)
+// Ethernet and WiFi each add a netif
+#define LWIP_SINGLE_NETIF              0
+#else
 #define LWIP_SINGLE_NETIF              1  /* 0 */
+#endif  // QNETHERNET_INTERNAL_MULTIPLE_DRIVERS
 #define LWIP_NETIF_HOSTNAME            1  /* 0 */
 // #define LWIP_NETIF_API                 0
 // #define LWIP_NETIF_STATUS_CALLBACK     0

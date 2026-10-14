@@ -97,3 +97,62 @@ stop the board from joining.
 - [ ] CYW43439: same test
 - [ ] Compare the "begin() returned after" and "address after" times against
       the previous build
+
+## `EthernetAndWiFi` assertion: "single netif already set"
+
+Branch: `fix/cyw43-ioctl-irq-race`
+
+### Symptom
+
+On both the CYW4343W and the CYW43439, `examples/EthernetAndWiFi` stopped
+right after starting WiFi:
+
+```text
+Assertion "single netif already set" failed at line 305 in .../src/lwip/netif.c
+```
+
+### Cause
+
+`src/lwipopts.h` still had `LWIP_SINGLE_NETIF 1`, a setting carried over from
+upstream QNEthernet. With it, lwIP allows only one network interface, so
+`netif_add()` asserts when a second one is added. Ethernet starts first in this
+example, so WiFi's interface is the one rejected. The WiFi-only examples never
+add a second interface, which is why they worked. The multi-interface work
+never changed this setting, so it affects both chips the same way.
+
+### Change
+
+`src/lwipopts.h`: `LWIP_SINGLE_NETIF` now depends on whether WiFi is compiled
+in:
+
+```c
+#if defined(QNETHERNET_INTERNAL_MULTIPLE_DRIVERS)
+// Ethernet and WiFi each add a netif
+#define LWIP_SINGLE_NETIF              0
+#else
+#define LWIP_SINGLE_NETIF              1  /* 0 */
+#endif  // QNETHERNET_INTERNAL_MULTIPLE_DRIVERS
+```
+
+- `lwipopts.h` already includes `qnethernet/driver_select.h`, which defines
+  `QNETHERNET_INTERNAL_MULTIPLE_DRIVERS` whenever
+  `ARDUINO_TEENSY41_CYW4343W=1`.
+- Ethernet-only builds keep the original single-interface setting.
+- With the setting at `0`, lwIP keeps a list of interfaces, and
+  `ETHARP_TABLE_MATCH_NETIF` defaults to on, so each ARP entry is tied to its
+  interface. That's what you want with two networks. It costs about 2 KB of
+  code space.
+
+### Build check
+
+- With WiFi (`ARDUINO_TEENSY41_CYW4343W=1`): `EthernetAndWiFi`, `WiFiConnect`
+  and `LinkWatcher` build.
+- Ethernet only (`ARDUINO_TEENSY41_CYW4343W=0`): `Ping` builds.
+
+### Testing (pending, needs hardware)
+
+- [ ] CYW4343W: run `EthernetAndWiFi` and check that both interfaces get an
+      address
+- [ ] CYW43439: same test
+- [ ] Confirm traffic leaves through the right interface. With two interfaces,
+      lwIP picks one by subnet and falls back to the default.
