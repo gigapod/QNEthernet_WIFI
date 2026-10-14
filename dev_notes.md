@@ -248,10 +248,32 @@ field is 9 bits, so one CMD53 can move at most 512 bytes. The argument used
 This branch doesn't include the ioctl hang fix, so keep the `delay(1)` after
 `WiFi.begin()`, or merge `fix/cyw43-ioctl-irq-race` first.
 
-- [ ] Large frames sent: `WiFiTCPThroughput` sending from the Teensy, and
-      `WiFiPing` with a payload over about 500 bytes. These are expected to
-      fail on `main`.
-- [ ] Large frames received: `WiFiTCPThroughput` receiving, and large downloads
-      with `WiFiHTTPClient`
+- [ ] Large frames received: `WiFiTCPThroughput` (it only receives; the
+      Teensy sends just ACKs), and large downloads with `WiFiHTTPClient`
+- [ ] Large frames sent: ping the Teensy from a computer with a large payload,
+      for example `ping -s 1400 <teensy-ip>`, so each echo reply is a
+      full-size frame. Also try large datagrams with `WiFiUDPEcho`. These are
+      expected to fail on `main`, but that hasn't been confirmed.
 - [ ] Regression: `WiFiConnect`, `WiFiScan`, `WiFiUDPEcho`
 - [ ] Run all of the above on both the CYW4343W and the CYW43439
+
+### Follow-up fix: receive hang in `WiFiTCPThroughput`
+
+Hardware testing found that `WiFiTCPThroughput` connected but the transfer
+hung. On `main` it works.
+
+**Cause:** every write sets `SDHC_PROCTL_SABGREQ` (stop at block gap request),
+and nothing cleared it before a read. On `main`, every read was a single block
+or byte transfer, so the leftover request never mattered. With block mode, a
+full-size received frame is read as two 512-byte blocks plus a byte-mode
+remainder. The controller stopped after the first block, and the read loop
+waits on `SDHC_PRSSTAT_BREN` with no timeout, so it hung. Joining and DHCP
+use only small frames, which is why connecting still worked.
+
+**Fix (`cardCMD53_xfer()`):** clear `SABGREQ` before issuing any multi-block
+transfer, read or write. The write path still sets it for single-block and
+byte-mode writes, as before.
+
+**Still open:** the `BREN`/`BWEN` spin loops in `cardCMD53_xfer()` have no
+timeout, so any transfer that stops early hangs instead of failing. Bounding
+them also needs a data-line reset on failure to leave the controller usable.

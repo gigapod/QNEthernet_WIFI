@@ -418,8 +418,12 @@ bool W4343WCard::cardCMD53_xfer(uint32_t functionNumber, uint32_t registerAddres
   if(write == false) {
     xfertyp |=  SDHC_MIX_CTRL_DTDSEL;
   }
-  if(blockMode && (count > 1)) {
+  const bool multiBlock = blockMode && (count > 1);
+  if(multiBlock) {
     xfertyp |= SDHC_MIX_CTRL_MSBSEL;
+    // Writes leave Stop At Block Gap Request set, which would pause this
+    // transfer, read or write, after the first block
+    m_psdhc->PROT_CTRL &= ~SDHC_PROCTL_SABGREQ;
   }
   setBlockCountSize(blockMode, functionNumber, count);
   // Debug info
@@ -453,7 +457,7 @@ bool W4343WCard::cardCMD53_xfer(uint32_t functionNumber, uint32_t registerAddres
     }
     //Set Stop At Block Gap Request, except for multi-block writes, which it
     //would pause after the first block
-    if(!(blockMode && (count > 1))) {
+    if(!multiBlock) {
       m_psdhc->PROT_CTRL |= SDHC_PROCTL_SABGREQ;
     }
     uint32_t index = 0;
