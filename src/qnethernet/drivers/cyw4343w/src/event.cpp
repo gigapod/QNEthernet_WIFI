@@ -263,7 +263,17 @@ int Event::event_net_tx(void *data, int len) {
   txp->sdpcm.seq = sd_tx_seq++;
   memcpy(txp->data, (uint8_t *)data, len);
   while (txlen & 3) dp[txlen++] = 0;
-  return (WIFIcard.cardCMD53_write(SD_FUNC_RAD, 0, (uint8_t *)dp, txlen, false));
+  // A byte-mode CMD53 carries at most 512 bytes (its byte count is 9 bits;
+  // a longer transfer reaches the chip with a wrapped length and the frame
+  // is lost). Send a longer frame as several transfers, the way
+  // ioctl_get_event() reads a long frame.
+  for (int n = 0; n < txlen; n += IOCTL_MAX_BLKLEN_T4) {
+    const int blklen = MIN(txlen - n, IOCTL_MAX_BLKLEN_T4);
+    if (!WIFIcard.cardCMD53_write(SD_FUNC_RAD, 0, dp + n, blklen, false)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // =====================================================================

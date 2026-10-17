@@ -1394,6 +1394,9 @@ int W4343WCard::ioctl_cmd(int cmd, const char *name, int wait_msec, int wr, void
   // Send IOCTL command
   const bool wasBusy = ioctlBusy;
   ioctlBusy = true;
+  // Clear any IRQ left over from an earlier frame so it isn't taken as the
+  // response to this request
+  dataISRReceived = false;
   cardCMD53_write(SD_FUNC_RAD, SB_32BIT_WIN, (uint8_t *)msgp, CYW43_WRITE_BYTES_PAD(txlen), logOutput);
   const int ret = ioctl_cmd_poll_device(wait_msec, wr, data, dlen, logOutput);
   ioctlBusy = wasBusy;
@@ -1414,7 +1417,11 @@ int W4343WCard::ioctl_cmd_poll_device(int wait_msec, int wr, void *data, int dle
   //TODO consider code in cyw43_ll_sdpcm_poll_device(), cyw43_ll.c, line 948
 //  printf(SER_TRACE "Waiting for response" SER_RESET);
 //  uint32_t start = micros();
-  while (dataISRReceived == false) {}
+  // Wait briefly for the IRQ. The IRQ is edge-triggered and shared with event
+  // and data frames, so its edge can be missed; the status poll below still
+  // finds the response in that case.
+  const uint32_t irqStart = micros();
+  while (!dataISRReceived && ((micros() - irqStart) < IOCTL_IRQ_WAIT_USEC)) {}
 //  printf(SER_MAGENTA " - IRQ response in %lduS\n", micros()-start);
   dataISRReceived = false;
   ioctl_wait(IOCTL_WAIT_USEC);
@@ -1506,9 +1513,11 @@ int W4343WCard::ioctl_cmd_poll_device(int wait_msec, int wr, void *data, int dle
 //==============================================================================
 int W4343WCard::ioctl_wait(int usec) {
   int ready = 0;
-//  uint32_t startMicros = micros();
-  //TODO restore wait time before timeout, or switch to interrupt - currently takes significantly longer than the requested timeout
-  while(ready == false) { // && !(micros() > startMicros + (usec * 2))) {
+  const uint32_t startMicros = micros();
+  // Ready can take significantly longer than the requested usec, so bound the
+  // wait with a generous limit instead
+  (void)usec;
+  while((ready == false) && ((micros() - startMicros) < IOCTL_BUSY_MAX_USEC)) {
     ready = fUseSDIO2 == false ? (GPIO3_PSR & (1 << 15)) ? false : true : (GPIO1_PSR & (1 << 21)) ? false : true;
   }
 //  printf("%s Ready in %lduS, expected %lduS\n" SER_RESET, ready == true ? SER_MAGENTA "Is": SER_RED "Not", micros()- startMicros, usec);
