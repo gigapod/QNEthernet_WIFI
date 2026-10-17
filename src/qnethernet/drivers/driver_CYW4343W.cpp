@@ -384,8 +384,12 @@ err_t output(struct pbuf *p) {
     return ERR_BUF;
   }
   // Transmit buffer.
-  evt.event_net_tx(buffer, copied);
+  const bool sent = evt.event_net_tx(buffer, copied);
   free(buffer);  // Free buffer mem.
+  if (!sent) {  // The bus write failed: tell lwIP, so TCP retransmits
+    LINK_STATS_INC(link.drop);
+    return ERR_IF;
+  }
   return ERR_OK;
 }
 
