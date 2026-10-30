@@ -290,7 +290,9 @@ bool W4343WCard::cardCMD52(uint32_t functionNumber, uint32_t registerAddress, ui
   } 
   // Issue the command
   if (!cardCommand(CMD52_XFERTYP, arg)) {
+#if DEBUG_WARNINGS == true
     printf("CMD52 failed\n");
+#endif
     return false;
   }
 //  if (logOutput) printf("CMD52 %s, 0x%08X, response: 0x%02X\n", write == true ? "write" : "read", registerAddress, m_psdhc->CMD_RSP0 & 0xFF);
@@ -482,7 +484,9 @@ bool W4343WCard::cardCommand(uint32_t xfertyp, uint32_t arg) {
 //  printf(SER_YELLOW "\n%s\n" SER_RESET, cmdInfo);
 
   if (waitTimeout(&W4343WCard::isBusyCommandInhibit)) {
+#if DEBUG_WARNINGS == true
     printf("cardCommand(%lx, %lx) error isBusyCommandInhibit\n", xfertyp, arg);
+#endif
     return false;  // Caller will set errorCode.
   }
   m_psdhc->CMD_ARG = arg;
@@ -495,7 +499,9 @@ bool W4343WCard::cardCommand(uint32_t xfertyp, uint32_t arg) {
   m_psdhc->CMD_XFR_TYP = xfertyp;  // Execute command
 
   if (waitTimeout(&W4343WCard::isBusyCommandComplete)) {
+#if DEBUG_WARNINGS == true
     printf("cardCommand(%lx, %lx) error isBusyCommandComplete\n", xfertyp, arg);
+#endif
     return false;  // Caller will set errorCode.
   }
   m_irqstat = m_psdhc->INT_STATUS;
@@ -995,7 +1001,11 @@ bool W4343WCard::begin(bool SDIOused, int8_t wlOnPin, int8_t wlIrqPin, int8_t ex
   //CMD 0
   cardCommand(CMD0_XFERTYP, 0);
   //CMD 5
-  cardCommand(CMD5_XFERTYP, 0);
+  // No response at all (command timeout) means no SDIO card: stop here. Going on, every later
+  // command would wait out BUSY_TIMEOUT_MICROS on the stuck command line.
+  if (!cardCommand(CMD5_XFERTYP, 0) && (m_irqstat & SDHC_IRQSTAT_CTOE)) {
+    return wifiError(WIFI_CARD_ERROR_CMD5);
+  }
   //CMD 5
   //cardCommand(CMD5_XFERTYP, 0x200000); // Not needed
   //CMD 3

@@ -31,7 +31,9 @@ bool WIFIboot() {
   // WIFIcard.begin(true, 30, 29, -1) for CYW43439 board. 
   //////////////////////////////////////////
   if (WIFIcard.begin(true, REG_ON, WL_IRQ, -1) != true) {
+#if DEBUG_WARNINGS == true
     printf("*************** Initialization Failed! ****************\n");
+#endif
     return false;
   }
   WIFIcard.wifiSetup(); // Only needed for wifi scan usage
