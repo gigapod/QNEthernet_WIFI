@@ -83,7 +83,8 @@
   WIFI_CARD_ERROR(ERASE_TIMEOUT, "Erase command timeout")\
   WIFI_CARD_ERROR(INIT_NOT_CALLED, "Card has not been initialized")\
   WIFI_CARD_ERROR(INVALID_CARD_CONFIG, "Invalid card config")\
-  WIFI_CARD_ERROR(FUNCTION_NOT_SUPPORTED, "Unsupported SDIO command")
+  WIFI_CARD_ERROR(FUNCTION_NOT_SUPPORTED, "Unsupported SDIO command")\
+  WIFI_CARD_ERROR(CMD5, "No SDIO card (no response to IO_SEND_OP_COND)")
 
 
 enum {
